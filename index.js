@@ -10,7 +10,6 @@ const shapes_client = new OpenAI({
 });
 
 let bot;
-let mcData;
 let movements;
 let followingPlayer = null;
 let staying = false;
@@ -24,20 +23,9 @@ function createBot() {
     });
 
     bot.once('spawn', () => {
-        mcData = require('minecraft-data')(bot.version);
-
-        if (!mcData || !mcData.blocksByName) {
-            console.error("Error crítico: mcData no cargó correctamente.");
-            bot.quit();
-            return;
-        }
-
         bot.loadPlugin(pathfinder);
 
-        console.log("Versión de Minecraft detectada:", bot.version);
-        console.log("Bloques cargados:", Object.keys(mcData.blocksByName));
-
-        movements = new Movements(bot, mcData);
+        movements = new Movements(bot, bot.registry); // Usamos bot.registry en vez de mcData
         bot.pathfinder.setMovements(movements);
 
         bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
@@ -130,7 +118,7 @@ function createBot() {
                 bot.chat("Indica el nombre del mineral. Ejemplo: !rodent consigue iron_ore");
                 return;
             }
-            const blockId = mcData.blocksByName[mineral]?.id || null;
+            const blockId = bot.registry.blocksByName[mineral]?.id || null;
             if (!blockId) {
                 bot.chat(`El mineral "${mineral}" no existe.`);
                 return;
