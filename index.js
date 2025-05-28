@@ -21,8 +21,6 @@ const bot = mineflayer.createBot({
 bot.loadPlugin(pathfinder);
 
 // Configurar movimientos
-console.log("Versión de Minecraft:", bot.version); 
-const mcData = require('minecraft-data')(bot.version);
 const movements = new Movements(bot, mcData);
 bot.pathfinder.setMovements(movements);
 
@@ -131,6 +129,8 @@ bot.on('chat', async (username, message) => {
 
 // Eventos adicionales
 bot.on('spawn', () => {
+    console.log("Versión de Minecraft:", bot.version); 
+    const mcData = require('minecraft-data')(bot.version);
     bot.chat("¡Hola! Soy RodentPlay, tu compañero IA en este mundo de Minecraft.");
 });
 
