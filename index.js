@@ -14,7 +14,8 @@ const shapes_client = new OpenAI({
 const bot = mineflayer.createBot({
     host: process.env.SERVER_IP, // Dirección del servidor
     port: process.env.SERVER_PORT, // Puerto del servidor
-    username: 'RodentBot' // Nombre del bot
+    username: 'RodentBot', // Nombre del bot
+    version: '1.20.4'
 });
 
 // Variables de estado
