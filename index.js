@@ -18,7 +18,7 @@ const bot = mineflayer.createBot({
 });
 
 // Variables de estado
-let mcData;
+let mcData = require('minecraft-data')("1.21.5");
 let movements;
 let followingPlayer = null;
 let staying = false;
@@ -26,8 +26,6 @@ let defending = false; // Para evitar listeners duplicados
 
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
-
-    mcData = require('minecraft-data')("1.21.5");
 
     if (!mcData || !mcData.blocksByName) {
         console.error("Error crítico: mcData no cargó correctamente.");
