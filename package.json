@@ -1,0 +1,14 @@
+{
+  "name": "minecraft-ai-bot",
+  "version": "1.0.0",
+  "description": "Bot de Minecraft con integración de Shapes API",
+  "main": "index.js",
+  "dependencies": {
+    "mineflayer": "^4.5.0",
+    "openai": "^4.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}
