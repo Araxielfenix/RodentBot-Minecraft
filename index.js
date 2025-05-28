@@ -69,8 +69,8 @@ bot.on('chat', async (username, message) => {
     // Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
     const msgLower = message.toLowerCase();
 
-    // Verificar si el mensaje comienza con "!rodent"
-    if (!msgLower.startsWith("!rodent")) return;
+    // Verificar si el mensaje comienza con "!"
+    if (!msgLower.startsWith("!")) return;
 
     const args = msgLower.slice(8).trim().split(" ");
     const command = args[0];
