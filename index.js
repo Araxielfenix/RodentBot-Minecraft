@@ -29,6 +29,8 @@ bot.on('spawn', () => {
 
     mcData = require('minecraft-data')(bot.version); // Usa la versión del bot, no una fija
 
+    console.log("mcData: " + mcData);
+
     if (!mcData || !mcData.blocksByName) {
         console.error("Error crítico: mcData no cargó correctamente.");
         return;
