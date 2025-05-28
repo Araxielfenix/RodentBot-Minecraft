@@ -14,8 +14,7 @@ const shapes_client = new OpenAI({
 const bot = mineflayer.createBot({
     host: process.env.SERVER_IP, // Dirección del servidor
     port: process.env.SERVER_PORT, // Puerto del servidor
-    username: 'RodentBot', // Nombre del bot
-     chat: 'legacy'
+    username: 'RodentBot' // Nombre del bot
 });
 
 // Variables de estado
@@ -68,8 +67,8 @@ bot.on('chat', async (username, message) => {
     // Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
     const msgLower = message.toLowerCase();
 
-    // Verificar si el mensaje comienza con el comando
-    if (!msgLower.startsWith(process.env.COMMAND)) return;
+    // Verificar si el mensaje comienza con "!rodent"
+    if (!msgLower.startsWith("!rodent")) return;
 
     const args = msgLower.slice(8).trim().split(" ");
     const command = args[0];
