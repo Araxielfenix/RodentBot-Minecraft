@@ -25,10 +25,11 @@ let mcData;
 let movements;
 let followingPlayer = null;
 let staying = false;
+let defending = false; // Nueva variable para evitar listeners duplicados
 
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
-    
+
     mcData = require('minecraft-data')("1.21.5");
 
     if (!mcData || !mcData.blocksByName) {
@@ -44,9 +45,6 @@ bot.on('spawn', () => {
 
     bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
 });
-
-
-
 
 // Función para obtener respuesta de la IA
 async function getShapeResponse(prompt) {
@@ -72,14 +70,17 @@ bot.on('chat', async (username, message) => {
     // Verificar si el mensaje comienza con "!rodent"
     if (!msgLower.startsWith("!rodent")) return;
 
-    const args = msgLower.slice(8).trim().split(" "); // Eliminar "!rodent" y dividir el mensaje
+    const args = msgLower.slice(8).trim().split(" ");
     const command = args[0];
 
     if (command === "sigueme") {
-        followingPlayer = bot.players[username];
-        if (followingPlayer) {
+        const player = bot.players[username];
+        if (player && player.entity) {
+            followingPlayer = player;
             bot.chat(`¡Te seguiré, ${username}!`);
             bot.pathfinder.setGoal(new GoalFollow(followingPlayer.entity, 1), true);
+        } else {
+            bot.chat("No puedo encontrarte para seguirte.");
         }
     } else if (command === "quedate") {
         staying = true;
@@ -87,66 +88,111 @@ bot.on('chat', async (username, message) => {
         bot.pathfinder.setGoal(null); // Detiene el movimiento
     } else if (command === "ven") {
         const player = bot.players[username];
-        if (player) {
+        if (player && player.entity) {
             bot.pathfinder.setGoal(new GoalNear(player.entity.position.x, player.entity.position.y, player.entity.position.z, 1));
             bot.chat(`¡Voy hacia ti, ${username}!`);
+        } else {
+            bot.chat("No puedo ir hacia ti porque no te encuentro.");
         }
     } else if (command === "ve") {
         if (args.length === 4) {
             const x = parseInt(args[1]);
             const y = parseInt(args[2]);
             const z = parseInt(args[3]);
-            bot.pathfinder.setGoal(new GoalBlock(x, y, z));
-            bot.chat(`¡Voy a las coordenadas ${x}, ${y}, ${z}!`);
+            if (isNaN(x) || isNaN(y) || isNaN(z)) {
+                bot.chat("Las coordenadas no son válidas.");
+            } else {
+                bot.pathfinder.setGoal(new GoalBlock(x, y, z));
+                bot.chat(`¡Voy a las coordenadas ${x}, ${y}, ${z}!`);
+            }
         } else if (args.length === 2) {
             const targetPlayer = args[1];
             const player = bot.players[targetPlayer];
-            if (player) {
+            if (player && player.entity) {
                 bot.pathfinder.setGoal(new GoalNear(player.entity.position.x, player.entity.position.y, player.entity.position.z, 1));
                 bot.chat(`¡Voy hacia ${targetPlayer}!`);
+            } else {
+                bot.chat(`No encuentro al jugador ${targetPlayer}.`);
             }
+        } else {
+            bot.chat("Uso correcto: !rodent ve <x> <y> <z> o !rodent ve <jugador>");
         }
     } else if (command === "aplana") {
         const size = parseInt(args[1]);
+        if (isNaN(size) || size < 1 || size > 10) {
+            bot.chat("Indica un tamaño válido (1-10). Ejemplo: !rodent aplana 3");
+            return;
+        }
         bot.chat(`¡Voy a aplanar un área de ${size} bloques!`);
         for (let dx = -size; dx <= size; dx++) {
             for (let dz = -size; dz <= size; dz++) {
                 const block = bot.blockAt(bot.entity.position.offset(dx, -1, dz));
                 if (block && bot.canSeeBlock(block)) {
-                    bot.dig(block);
+                    try {
+                        await bot.dig(block);
+                    } catch (err) {
+                        console.error("Error al picar bloque:", err);
+                    }
                 }
             }
         }
     } else if (command === "consigue") {
         const mineral = args[1];
+        if (!mineral) {
+            bot.chat("Indica el nombre del mineral. Ejemplo: !rodent consigue iron_ore");
+            return;
+        }
+        const blockId = mcData.blocksByName[mineral]?.id || null;
+        if (!blockId) {
+            bot.chat(`El mineral "${mineral}" no existe.`);
+            return;
+        }
         bot.chat(`¡Buscando ${mineral}!`);
         const block = bot.findBlock({
-            matching: mcData.blocksByName[mineral]?.id || null,
+            matching: blockId,
             maxDistance: 32
         });
         if (block) {
             bot.pathfinder.setGoal(new GoalBlock(block.position.x, block.position.y, block.position.z));
-            bot.dig(block);
+            try {
+                await bot.dig(block);
+            } catch (err) {
+                bot.chat("No pude picar el bloque.");
+            }
         } else {
             bot.chat(`No encontré ${mineral} cerca.`);
         }
     } else if (command === "protegeme") {
+        if (defending) {
+            bot.chat("Ya estoy en modo defensa.");
+            return;
+        }
+        defending = true;
         bot.chat("¡Activando modo defensa!");
-        bot.on('entitySpawn', (entity) => {
+        const defenseListener = (entity) => {
             if (entity.type === 'mob' && entity.position.distanceTo(bot.entity.position) < 10) {
                 bot.attack(entity);
                 bot.chat(`¡Atacando a ${entity.name}!`);
             }
-        });
+        };
+        bot._defenseListener = defenseListener;
+        bot.on('entitySpawn', defenseListener);
     } else if (command === "reanuda") {
         staying = false;
         bot.chat("¡Listo para moverte de nuevo!");
+    } else if (command === "ayuda") {
+        bot.chat("Comandos disponibles: sigueme, quedate, ven, ve, aplana, consigue, protegeme, reanuda");
     } else {
-        bot.chat("No reconozco ese comando. Usa `!Rodent ayuda` para ver los disponibles.");
+        bot.chat("No reconozco ese comando. Usa '!rodent ayuda' para ver los disponibles.");
     }
 });
 
 // Eventos adicionales
 bot.on('death', () => {
     bot.chat("¡Oh no! Volveré pronto.");
+    defending = false;
+    if (bot._defenseListener) {
+        bot.removeListener('entitySpawn', bot._defenseListener);
+        bot._defenseListener = null;
+    }
 });
