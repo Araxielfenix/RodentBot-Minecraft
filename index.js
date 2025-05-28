@@ -21,6 +21,7 @@ const bot = mineflayer.createBot({
 bot.loadPlugin(pathfinder);
 
 // Configurar movimientos
+console.log("Versión de Minecraft:", bot.version); 
 const mcData = require('minecraft-data')(bot.version);
 const movements = new Movements(bot, mcData);
 bot.pathfinder.setMovements(movements);
