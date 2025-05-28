@@ -2,12 +2,11 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
-import dotenv from "dotenv";
-dotenv.config();
+require("dotenv").config(); // Carga variables de entorno desde .env
 
 // Configurar el cliente de Shapes
 const shapes_client = new OpenAI({
-    apiKey: process.env.SHAPES_API_KEY,
+    apiKey: process.env.SHAPES_API_KEY, // Usa una variable de entorno para la API Key
     baseURL: "https://api.shapes.inc/v1",
 });
 
@@ -49,10 +48,26 @@ async function getShapeResponse(prompt) {
 bot.on('chat', async (username, message) => {
     if (username === bot.username) return;
 
-    const args = message.split(" ");
-    const command = args[0].toLowerCase();
+    // Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
+    const msgLower = message.toLowerCase();
 
-    if (command === "ven") {
+    // Verificar si el mensaje comienza con el comando definido en la variable de entorno.
+    if (!msgLower.startsWith(process.env.COMMAND)) return;
+
+    const args = msgLower.slice(8).trim().split(" "); // Eliminar el comando y dividir el mensaje
+    const command = args[0];
+
+    if (command === "sigueme") {
+        followingPlayer = bot.players[username];
+        if (followingPlayer) {
+            bot.chat(`¡Te seguiré, ${username}!`);
+            bot.pathfinder.setGoal(new GoalFollow(followingPlayer.entity, 1), true);
+        }
+    } else if (command === "quedate") {
+        staying = true;
+        bot.chat("¡Me quedaré aquí!");
+        bot.pathfinder.setGoal(null); // Detiene el movimiento
+    } else if (command === "ven") {
         const player = bot.players[username];
         if (player) {
             bot.pathfinder.setGoal(new GoalNear(player.entity.position.x, player.entity.position.y, player.entity.position.z, 1));
@@ -88,7 +103,7 @@ bot.on('chat', async (username, message) => {
         const mineral = args[1];
         bot.chat(`¡Buscando ${mineral}!`);
         const block = bot.findBlock({
-            matching: mcData.blocksByName[mineral].id,
+            matching: mcData.blocksByName[mineral]?.id || null,
             maxDistance: 32
         });
         if (block) {
@@ -97,7 +112,7 @@ bot.on('chat', async (username, message) => {
         } else {
             bot.chat(`No encontré ${mineral} cerca.`);
         }
-    } else if (command === "cuidame") {
+    } else if (command === "protegeme") {
         bot.chat("¡Activando modo defensa!");
         bot.on('entitySpawn', (entity) => {
             if (entity.type === 'mob' && entity.position.distanceTo(bot.entity.position) < 10) {
@@ -105,22 +120,11 @@ bot.on('chat', async (username, message) => {
                 bot.chat(`¡Atacando a ${entity.name}!`);
             }
         });
-    } else if (command === "sigueme") {
-        followingPlayer = bot.players[username];
-        if (followingPlayer) {
-            bot.chat(`¡Te seguiré, ${username}!`);
-            bot.pathfinder.setGoal(new GoalFollow(followingPlayer.entity, 1), true);
-        }
-    } else if (command === "quedate") {
-        staying = true;
-        bot.chat("¡Me quedaré aquí!");
-        bot.pathfinder.setGoal(null); // Detiene el movimiento
-    } else if (command === "continua") {
+    } else if (command === "reanuda") {
         staying = false;
         bot.chat("¡Listo para moverte de nuevo!");
     } else {
-        const reply = await getShapeResponse(message);
-        bot.chat(reply);
+        bot.chat("No reconozco ese comando. Usa `!Rodent ayuda` para ver los disponibles.");
     }
 });
 
