@@ -27,7 +27,7 @@ let defending = false; // Para evitar listeners duplicados
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
 
-    mcData = require('minecraft-data')("1.21.5");
+    mcData = require('minecraft-data')(bot.version);
 
     if (!mcData || !mcData.blocksByName) {
         console.error("Error crítico: mcData no cargó correctamente.");
