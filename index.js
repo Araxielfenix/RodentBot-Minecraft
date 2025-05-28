@@ -65,6 +65,8 @@ bot.on('chat', async (username, message) => {
     // Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
     const msgLower = message.toLowerCase();
 
+    console.log("Mensaje del chat: " + message);
+
     // Verificar si el mensaje comienza con "!"
     if (!msgLower.startsWith("!")) return;
 
