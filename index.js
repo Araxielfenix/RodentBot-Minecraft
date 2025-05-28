@@ -1,5 +1,4 @@
 const mineflayer = require('mineflayer');
-const minecraftData = require('minecraft-data');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
@@ -19,7 +18,6 @@ const bot = mineflayer.createBot({
 });
 
 // Variables de estado
-let mcData;
 let movements;
 let followingPlayer = null;
 let staying = false;
@@ -29,22 +27,13 @@ bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
     console.log('Versión del bot:', bot.version);
 
-    mcData = minecraftData(bot.version);
-
-    console.log("mcData: " + mcData);
-
-    if (!mcData || !mcData.blocksByName) {
-        console.error("Error crítico: mcData no cargó correctamente.");
-        return;
-    }
-
-    // Cargar el plugin pathfinder después de mcData
+    // Cargar el plugin pathfinder después del spawn
     bot.loadPlugin(pathfinder);
 
     console.log("Versión de Minecraft detectada:", bot.version);
-    console.log("Bloques cargados:", Object.keys(mcData.blocksByName));
+    console.log("Bloques cargados:", Object.keys(bot.registry.blocksByName));
 
-    movements = new Movements(bot, mcData);
+    movements = new Movements(bot, bot.registry);
     bot.pathfinder.setMovements(movements);
 
     bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
@@ -171,7 +160,7 @@ bot.on('chat', async (username, message) => {
         }
     }
     else if (msgLower.startsWith("!rodentbot")) {
-        bot.chat(getShapeResponse(message));
+        bot.chat(await getShapeResponse(message));
     }
 });
 
