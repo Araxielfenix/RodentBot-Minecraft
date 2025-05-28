@@ -17,25 +17,25 @@ const bot = mineflayer.createBot({
     username: 'RodentBot' // Nombre del bot
 });
 
-// Agregar el módulo de pathfinding
-bot.loadPlugin(pathfinder);
-
 // Variables de estado
 let mcData;
 let movements;
 let followingPlayer = null;
 let staying = false;
-let defending = false; // Nueva variable para evitar listeners duplicados
+let defending = false; // Para evitar listeners duplicados
 
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
 
-    mcData = require('minecraft-data')("1.21.5");
+    mcData = require('minecraft-data')(bot.version); // Usa la versión del bot, no una fija
 
     if (!mcData || !mcData.blocksByName) {
         console.error("Error crítico: mcData no cargó correctamente.");
         return;
     }
+
+    // Cargar el plugin pathfinder después de mcData
+    bot.loadPlugin(pathfinder);
 
     console.log("Versión de Minecraft detectada:", bot.version);
     console.log("Bloques cargados:", Object.keys(mcData.blocksByName));
