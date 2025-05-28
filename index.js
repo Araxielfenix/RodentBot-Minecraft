@@ -2,10 +2,12 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
+import dotenv from "dotenv";
+dotenv.config();
 
 // Configurar el cliente de Shapes
 const shapes_client = new OpenAI({
-    apiKey: "<your-API-key>", // Reemplázalo con tu clave de API
+    apiKey: process.env.SHAPES_API_KEY,
     baseURL: "https://api.shapes.inc/v1",
 });
 
@@ -32,7 +34,7 @@ let staying = false;
 async function getShapeResponse(prompt) {
     try {
         const response = await shapes_client.chat.completions.create({
-            model: "shapesinc/RodentPlay",
+            model: process.env.MODEL_NAME,
             messages: [{ role: "user", content: prompt }]
         });
 
@@ -95,7 +97,7 @@ bot.on('chat', async (username, message) => {
         } else {
             bot.chat(`No encontré ${mineral} cerca.`);
         }
-    } else if (command === "protegeme") {
+    } else if (command === "cuidame") {
         bot.chat("¡Activando modo defensa!");
         bot.on('entitySpawn', (entity) => {
             if (entity.type === 'mob' && entity.position.distanceTo(bot.entity.position) < 10) {
@@ -113,7 +115,7 @@ bot.on('chat', async (username, message) => {
         staying = true;
         bot.chat("¡Me quedaré aquí!");
         bot.pathfinder.setGoal(null); // Detiene el movimiento
-    } else if (command === "reanuda") {
+    } else if (command === "continua") {
         staying = false;
         bot.chat("¡Listo para moverte de nuevo!");
     } else {
