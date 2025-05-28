@@ -129,10 +129,21 @@ bot.on('chat', async (username, message) => {
 
 // Eventos adicionales
 bot.on('spawn', () => {
-    console.log("Versión de Minecraft:", bot.version); 
+    console.log("Bot conectado, obteniendo versión...");
+
+    // Ahora que el bot está conectado, obtenemos la versión correcta
     const mcData = require('minecraft-data')(bot.version);
-    bot.chat("¡Hola! Soy RodentPlay, tu compañero IA en este mundo de Minecraft.");
+
+    console.log("Versión de Minecraft:", bot.version);
+    console.log("Datos de Minecraft cargados:", mcData);
+
+    // Inicializar movimientos una vez que mcData esté disponible
+    const movements = new Movements(bot, mcData);
+    bot.pathfinder.setMovements(movements);
+
+    bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
 });
+
 
 bot.on('death', () => {
     bot.chat("¡Oh no! Me he quedado sin vidas. Volveré pronto.");
