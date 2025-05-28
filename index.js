@@ -69,7 +69,7 @@ bot.on('chat', async (username, message) => {
 
     // Verificar si el mensaje comienza con "!"
     if (msgLower.startsWith("!")) {
-        console.log(Mensaje recibido de ${username}: ${message});
+        console.log("Mensaje recibido de " + username + ": " + message);
         const args = msgLower.slice(8).trim().split(" ");
         const command = args[0];
 
