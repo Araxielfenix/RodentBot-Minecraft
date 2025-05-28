@@ -29,7 +29,12 @@ let staying = false;
 // Cuando el bot se conecta, definimos mcData y movements
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
+    
     mcData = require('minecraft-data')(bot.version);
+    if (!mcData) {
+        console.error("Error: mcData no se pudo cargar correctamente.");
+        return;
+    }
 
     console.log("Versión de Minecraft:", bot.version);
     console.log("Datos de Minecraft cargados:", mcData);
@@ -39,6 +44,7 @@ bot.on('spawn', () => {
 
     bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
 });
+
 
 // Función para obtener respuesta de la IA
 async function getShapeResponse(prompt) {
