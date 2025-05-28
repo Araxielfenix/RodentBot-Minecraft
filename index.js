@@ -22,10 +22,11 @@ function createBot() {
         username: 'RodentBot'
     });
 
+    // Carga pathfinder y Movements SOLO después de 'spawn', usando bot.mcData
     bot.once('spawn', () => {
         bot.loadPlugin(pathfinder);
 
-        movements = new Movements(bot, bot.registry); // Usamos bot.registry en vez de mcData
+        movements = new Movements(bot, bot.mcData);
         bot.pathfinder.setMovements(movements);
 
         bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
@@ -118,7 +119,7 @@ function createBot() {
                 bot.chat("Indica el nombre del mineral. Ejemplo: !rodent consigue iron_ore");
                 return;
             }
-            const blockId = bot.registry.blocksByName[mineral]?.id || null;
+            const blockId = bot.mcData.blocksByName[mineral]?.id || null;
             if (!blockId) {
                 bot.chat(`El mineral "${mineral}" no existe.`);
                 return;
