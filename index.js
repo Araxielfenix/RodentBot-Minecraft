@@ -12,8 +12,8 @@ const shapes_client = new OpenAI({
 
 // Crear el bot de Minecraft
 const bot = mineflayer.createBot({
-    host: 'RodentPlay.aternos.me', // Dirección del servidor
-    port: 22246, // Puerto del servidor
+    host: process.env.SERVER_IP, // Dirección del servidor
+    port: process.env.SERVER_PORT, // Puerto del servidor
     username: 'RodentBot' // Nombre del bot
 });
 
