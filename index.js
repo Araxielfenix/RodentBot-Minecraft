@@ -1,4 +1,5 @@
 const mineflayer = require('mineflayer');
+const minecraftData = require('minecraft-data');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
@@ -29,7 +30,7 @@ bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
     console.log('Versión del bot:', bot.version);
 
-    mcData = require('minecraft-data')(bot.version); // Usa la versión del bot, no una fija
+    mcData = minecraftData(bot.version);
 
     console.log("mcData: " + mcData);
 
