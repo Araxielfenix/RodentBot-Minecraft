@@ -20,13 +20,25 @@ const bot = mineflayer.createBot({
 // Agregar el módulo de pathfinding
 bot.loadPlugin(pathfinder);
 
-// Configurar movimientos
-const movements = new Movements(bot, mcData);
-bot.pathfinder.setMovements(movements);
-
 // Variables de estado
+let mcData;
+let movements;
 let followingPlayer = null;
 let staying = false;
+
+// Cuando el bot se conecta, definimos mcData y movements
+bot.on('spawn', () => {
+    console.log("Bot conectado, obteniendo versión...");
+    mcData = require('minecraft-data')(bot.version);
+
+    console.log("Versión de Minecraft:", bot.version);
+    console.log("Datos de Minecraft cargados:", mcData);
+
+    movements = new Movements(bot, mcData);
+    bot.pathfinder.setMovements(movements);
+
+    bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
+});
 
 // Función para obtener respuesta de la IA
 async function getShapeResponse(prompt) {
@@ -35,7 +47,6 @@ async function getShapeResponse(prompt) {
             model: process.env.MODEL_NAME,
             messages: [{ role: "user", content: prompt }]
         });
-
         return response.choices[0].message.content;
     } catch (error) {
         console.error("Error en la API de Shapes:", error);
@@ -50,10 +61,10 @@ bot.on('chat', async (username, message) => {
     // Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
     const msgLower = message.toLowerCase();
 
-    // Verificar si el mensaje comienza con el comando definido en la variable de entorno.
-    if (!msgLower.startsWith(process.env.COMMAND)) return;
+    // Verificar si el mensaje comienza con "!rodent"
+    if (!msgLower.startsWith("!rodent")) return;
 
-    const args = msgLower.slice(8).trim().split(" "); // Eliminar el comando y dividir el mensaje
+    const args = msgLower.slice(8).trim().split(" "); // Eliminar "!rodent" y dividir el mensaje
     const command = args[0];
 
     if (command === "sigueme") {
@@ -128,23 +139,6 @@ bot.on('chat', async (username, message) => {
 });
 
 // Eventos adicionales
-bot.on('spawn', () => {
-    console.log("Bot conectado, obteniendo versión...");
-
-    // Ahora que el bot está conectado, obtenemos la versión correcta
-    const mcData = require('minecraft-data')(bot.version);
-
-    console.log("Versión de Minecraft:", bot.version);
-    console.log("Datos de Minecraft cargados:", mcData);
-
-    // Inicializar movimientos una vez que mcData esté disponible
-    const movements = new Movements(bot, mcData);
-    bot.pathfinder.setMovements(movements);
-
-    bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
-});
-
-
 bot.on('death', () => {
-    bot.chat("¡Oh no! Me he quedado sin vidas. Volveré pronto.");
+    bot.chat("¡Oh no! Volveré pronto.");
 });
