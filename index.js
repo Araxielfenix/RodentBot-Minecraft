@@ -62,7 +62,9 @@ async function getShapeResponse(prompt) {
 
 // **Acciones del bot según el chat**
 bot.on('chat', async (username, message) => {
-    if (username === bot.username) return;
+      if (username === bot.username) return; // Ignorar mensajes del propio bot
+          console.log(`[${username}]: ${message}`);
+        });
 
     // Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
     const msgLower = message.toLowerCase();
