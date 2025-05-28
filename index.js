@@ -26,25 +26,25 @@ let movements;
 let followingPlayer = null;
 let staying = false;
 
-// Cuando el bot se conecta, definimos mcData y movements
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
     
-    mcData = require('minecraft-data')(bot.version);
-    
-    if (!mcData || !mcData.blocksByName.water) {
-        console.error("Error: mcData no se cargó correctamente o falta 'water'.");
+    mcData = require('minecraft-data')("1.21.5");
+
+    if (!mcData || !mcData.blocksByName) {
+        console.error("Error crítico: mcData no cargó correctamente.");
         return;
     }
 
-    console.log("Versión de Minecraft:", bot.version);
-    console.log("Datos de Minecraft cargados:", mcData);
+    console.log("Versión de Minecraft detectada:", bot.version);
+    console.log("Bloques cargados:", Object.keys(mcData.blocksByName));
 
     movements = new Movements(bot, mcData);
     bot.pathfinder.setMovements(movements);
 
     bot.chat("¡Hola! Soy RodentBot, listo para jugar en Minecraft.");
 });
+
 
 
 
