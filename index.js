@@ -26,6 +26,7 @@ let defending = false; // Para evitar listeners duplicados
 
 bot.on('spawn', () => {
     console.log("Bot conectado, obteniendo versión...");
+    console.log('Versión del bot:', bot.version);
 
     mcData = require('minecraft-data')(bot.version); // Usa la versión del bot, no una fija
 
