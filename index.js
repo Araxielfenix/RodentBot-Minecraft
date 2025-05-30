@@ -569,6 +569,7 @@ async function craftItemCmd(itemName, amountStr) {
 
 // **Acciones del bot según el chat**
 bot.on("chat", async (username, message) => {
+	console.log(username + " dice: " + message);
 	if (username === bot.username) return;
 
 	// Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
