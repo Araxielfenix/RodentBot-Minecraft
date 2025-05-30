@@ -1,16 +1,17 @@
 {
-  "name": "minecraft-RodentBot",
-  "version": "1.0.0",
-  "description": "Bot de Minecraft con integración de Shapes API",
-  "main": "index.js",
-  "dependencies": {
-    "mineflayer": "^4.5.0",
-    "mineflayer-pathfinder": "^1.3.0",
-    "minecraft-data": "^2.88.0",
-    "openai": "^4.0.0",
-    "dotenv": "^16.0.0"
-  },
-  "scripts": {
-    "start": "node index.js"
-  }
+	"name": "minecraft-RodentBot",
+	"version": "1.0.0",
+	"description": "Bot de Minecraft con integración de Shapes API",
+	"main": "index.js",
+	"dependencies": {
+		"dotenv": "^16.5.0",
+		"minecraft-data": "^3.89.0",
+		"mineflayer": "^4.0.0",
+		"mineflayer-auto-eat": "^3.3.6",
+		"mineflayer-pathfinder": "^2.4.5",
+		"openai": "^5.0.1"
+	},
+	"scripts": {
+		"start": "node index.js"
+	}
 }
