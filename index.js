@@ -25,10 +25,10 @@ console.log(
 
 // Crear el bot de Minecraft
 const bot = mineflayer.createBot({
-	//host: process.env.SERVER_IP, // Dirección del servidor
-	//port: process.env.SERVER_PORT, // Puerto del servidor
-	host: "localhost",
-	port: 25565,
+	host: process.env.SERVER_IP, // Dirección del servidor
+	port: process.env.SERVER_PORT, // Puerto del servidor
+	//host: "localhost",
+	//port: 25565,
 	username: "RodentBot",
 });
 
