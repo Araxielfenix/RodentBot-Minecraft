@@ -5,7 +5,17 @@ const { GoalBlock, GoalNear, GoalFollow } = goals;
 const blockTranslations = require("./blockTranslations.js");
 const fs = require("fs");
 const path = require("path");
+const { job } = require('./keep_alive.js');
+const express = require('express');
+const expressWs = require('express-ws');
 require("dotenv").config(); // Carga variables de entorno desde .env
+
+job.start();
+
+const app = express();
+const expressWsInstance = expressWs(app);
+
+app.set('view engine', 'ejs');
 
 const CHAT_COMMAND_PREFIX = process.env.COMMAND || "!"; // Usa el prefijo del .env o "!" por defecto
 const BOT_COMMAND_PREFIX = (process.env.COMMAND || "!") + "rodent "; // Unificamos el prefijo
