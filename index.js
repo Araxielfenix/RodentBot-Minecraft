@@ -5,14 +5,17 @@ const { GoalBlock, GoalNear, GoalFollow } = goals;
 const blockTranslations = require("./blockTranslations.js");
 const fs = require("fs");
 const path = require("path");
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000;
+import expressWs from 'express-ws';
+import {job} from './keep_alive.js';
 require("dotenv").config(); // Carga variables de entorno desde .env
 
 // === BLOQUE KEEP ALIVE PARA RENDER ===
-app.get('/', (req, res) => res.send('Bot is running!'));
-app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
+job.start();
+
+const app = express();
+const expressWsInstance = expressWs(app);
+
+app.set('view engine', 'ejs');
 // === FIN BLOQUE KEEP ALIVE ===
 
 const CHAT_COMMAND_PREFIX = process.env.COMMAND || "!"; // Usa el prefijo del .env o "!" por defecto
