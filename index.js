@@ -25,8 +25,10 @@ console.log(
 
 // Crear el bot de Minecraft
 const bot = mineflayer.createBot({
-	host: process.env.SERVER_IP, // Dirección del servidor
-	port: process.env.SERVER_PORT, // Puerto del servidor
+	//host: process.env.SERVER_IP, // Dirección del servidor
+	//port: process.env.SERVER_PORT, // Puerto del servidor
+	host: "localhost",
+	port: 25565,
 	username: "RodentBot",
 });
 
@@ -1127,10 +1129,6 @@ bot.on("chat", async (username, message) => {
 			// Formato: !rodent usar [nombre_item]
 			// Ej: !rodent usar espada_diamante  O  !rodent usar (para usar lo que tenga en mano)
 			const itemName = args[0]; // Puede ser undefined si solo se escribe "!rodent usar"
-			await useItemCmd(itemName);
-		} else if (command === "fabricar" || command === "craft") {
-			// Formato: !rodent fabricar <nombre_item> [cantidad]
-			// Ej: !rodent fabricar palo 4
 		} else if (command === "fabricar" || command === "craft") {
 			// Formato: !rodent fabricar <nombre_item> [cantidad]
 			// Ej: !rodent fabricar palo 4
