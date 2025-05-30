@@ -5,30 +5,14 @@ const { GoalBlock, GoalNear, GoalFollow } = goals;
 const blockTranslations = require("./blockTranslations.js");
 const fs = require("fs");
 const path = require("path");
-const { CronJob } = require('cron');
-const { job } = require('./keep_alive.js');
 const express = require('express');
-const expressWs = require('express-ws');
+const app = express();
+const PORT = process.env.PORT || 3000;
 require("dotenv").config(); // Carga variables de entorno desde .env
 
 // === BLOQUE KEEP ALIVE PARA RENDER ===
-const render_url = process.env.RENDER_EXTERNAL_URL;
-if (!render_url) {
-  console.log("No RENDER_EXTERNAL_URL found. Please set it as environment variable.");
-}
-const job = new CronJob('*/14 * * * *', function () {
-  console.log('Making keep alive call');
-  https.get(render_url, (resp) => {
-    if (resp.statusCode === 200) {
-      console.log("Keep alive call successful");
-    } else {
-      console.log("Keep alive call failed");
-    }
-  }).on("error", (err) => {
-    console.log("Error making keep alive call");
-  });
-});
-job.start();
+app.get('/', (req, res) => res.send('Bot is running!'));
+app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
 // === FIN BLOQUE KEEP ALIVE ===
 
 const CHAT_COMMAND_PREFIX = process.env.COMMAND || "!"; // Usa el prefijo del .env o "!" por defecto
