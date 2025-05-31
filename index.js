@@ -3,9 +3,7 @@ const { pathfinder, Movements, goals } = require("mineflayer-pathfinder");
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
 const blockTranslations = require("./blockTranslations.js");
-const fs = require("fs");
 const path = require("path");
-require('./keep_alive.js');
 require("dotenv").config(); // Carga variables de entorno desde .env
 
 const CHAT_COMMAND_PREFIX = process.env.COMMAND || "!"; // Usa el prefijo del .env o "!" por defecto
@@ -26,12 +24,11 @@ console.log(
 
 // Crear el bot de Minecraft
 const bot = mineflayer.createBot({
-	host: process.env.SERVER_IP, // Dirección del servidor
-	port: process.env.SERVER_PORT, // Puerto del servidor
-	//host: "localhost",
-	//port: 25565,
+	//host: process.env.SERVER_IP, // Dirección del servidor
+	//port: process.env.SERVER_PORT, // Puerto del servidor
+	host: "localhost",
+	port: 25565,
 	username: "RodentBot",
-	version: "1.21.1"
 });
 
 // Variables de estado
@@ -46,6 +43,14 @@ let selfDefenseIntervalId = null; // ID del intervalo para el bucle de auto-defe
 const SELF_DEFENSE_RADIUS = 10; // Radio más corto para amenazas directas al bot
 const SELF_DEFENSE_TICK_RATE = 1500; // Chequeo un poco menos frecuente que protegeme
 const FLEE_DISTANCE = 15; // Distancia a la que intentará huir
+
+// --- Variables para la Cola de Comandos ---
+let commandQueue = [];
+let currentCommand = null; // { name: string, func: async function, args: array, username: string }
+let isBotDefendingItself = false; // true si el bot está activamente en modo de autodefensa
+
+// Error específico para interrupciones
+const INTERRUPTED_FOR_DEFENSE_ERROR = "INTERRUPTED_FOR_DEFENSE";
 
 let currentSelfDefenseTarget = null; // Para rastrear el objetivo actual en auto-defensa
 let announcedSelfDefenseActionForTarget = false; // Para saber si ya se anunció la acción para el objetivo actual
@@ -309,6 +314,7 @@ async function ensureBestGear(forSelfDefense = false) {
 
 async function selfDefenseLoop() {
 	// No hacer nada si el bot no está completamente cargado o no tiene entidad
+	// o si está en modo "quedate" y no queremos que la autodefensa lo mueva (esto se maneja más abajo)
 	if (!bot.entity || !bot.registry) return;
 
 	const commonHostilesString = process.env.COMMON_HOSTILES || "";
@@ -335,11 +341,21 @@ async function selfDefenseLoop() {
 	}
 
 	if (nearestHostileToBot) {
-		if (staying) {
-			bot.chat("¡Amenaza detectada! No puedo quedarme aquí!");
-			staying = false; // Salir del modo "quedate"
+		if (!isBotDefendingItself) {
+			// Primera vez que detecta una amenaza en este "encuentro"
+			isBotDefendingItself = true;
+			if (currentCommand) {
+				bot.chat(
+					`¡Autodefensa activada! Pausando comando actual: ${currentCommand.name}.`
+				);
+				bot.pathfinder.stop(); // Intentar interrumpir el pathfinding del comando actual
+			}
 		}
 
+		if (staying) {
+			bot.chat("¡Amenaza detectada! Anulando 'quedate' para defenderme.");
+			staying = false; // La autodefensa tiene prioridad sobre "quedate"
+		}
 		await ensureBestGear(true); // Asegurarse de tener el mejor equipo
 
 		// Comprobar si el nearestHostileToBot es diferente del currentSelfDefenseTarget
@@ -398,25 +414,110 @@ async function selfDefenseLoop() {
 				true // Objetivo dinámico por si el mob persigue
 			);
 		}
-	} else {
-		// No hay hostil cercano en este tick.
-		// No ponemos currentSelfDefenseTarget a null aquí.
-		// Esto permite que si el mismo mob (identificado por currentSelfDefenseTarget.id)
-		// reaparece, no se vuelva a anunciar la acción, porque announcedSelfDefenseActionForTarget seguirá siendo true.
+	} else if (isBotDefendingItself) {
+		// No hay hostil cercano Y ESTABA en modo de autodefensa
+		isBotDefendingItself = false;
+		currentSelfDefenseTarget = null;
+		announcedSelfDefenseActionForTarget = false;
 
-		if (
-			!followingPlayer &&
-			!playerToDefend &&
-			!staying &&
-			bot.pathfinder.goal
-		) {
-			// console.log("[Self-Defense] No immediate threat, and not under other commands. Clearing pathfinder goal.");
-			bot.pathfinder.setGoal(null);
-			// bot.attack() debería dejar de intentar alcanzar un objetivo si el pathfinding se cancela
-			// y el objetivo ya no es válido o está demasiado lejos según su propia lógica interna.
+		bot.chat("Amenaza neutralizada. Limpiando objetivo de autodefensa.");
+		// Detener cualquier movimiento o ataque relacionado con la autodefensa
+		if (bot.pathfinder.isMoving()) {
+			bot.pathfinder.stop();
+		}
+		bot.pathfinder.setGoal(null); // Asegurarse de que no haya metas de pathfinding de defensa
+		console.log(
+			"DEBUG: bot object before stopAttacking:",
+			typeof bot.stopAttacking,
+			bot.stopAttacking
+		); // Línea de depuración
+		if (typeof bot.stopAttacking === "function") {
+			bot.stopAttacking(); // Detener cualquier ataque en curso
+		} else {
+			console.error(
+				"ERROR: bot.stopAttacking no es una función. No se pudo detener el ataque explícitamente."
+			);
+		}
+
+		// Intentar reanudar comandos en cola
+		runNextCommandFromQueue();
+	}
+}
+
+// --- Fin Funciones de Auto-Defensa ---
+
+// --- Funciones de Cola de Comandos ---
+async function runCommand(commandObj) {
+	currentCommand = commandObj;
+	bot.chat(
+		`Ejecutando comando: '${commandObj.name}' para ${commandObj.username}.`
+	);
+	try {
+		await commandObj.func(...commandObj.args, commandObj.username); // Pasar username para contexto si es necesario
+		bot.chat(`Comando '${commandObj.name}' completado.`);
+	} catch (err) {
+		if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) {
+			bot.chat(`Comando '${commandObj.name}' pausado debido a la autodefensa.`);
+			if (currentCommand) {
+				// Asegurarse de que currentCommand no haya sido nulificado
+				commandQueue.unshift(currentCommand); // Poner de nuevo al inicio de la cola
+			}
+		} else {
+			bot.chat(`Error durante el comando '${commandObj.name}': ${err.message}`);
+			console.error(
+				`Error ejecutando ${commandObj.name}:`,
+				err.message,
+				err.stack
+			);
+		}
+	} finally {
+		currentCommand = null;
+		if (!isBotDefendingItself) {
+			// Solo procesar el siguiente si no estamos en medio de una defensa
+			runNextCommandFromQueue();
 		}
 	}
 }
+
+function runNextCommandFromQueue() {
+	if (currentCommand || isBotDefendingItself || staying) {
+		// No iniciar un nuevo comando si ya hay uno, o si se está defendiendo, o si está en "quedate"
+		return;
+	}
+	if (commandQueue.length > 0) {
+		const nextCommand = commandQueue.shift();
+		runCommand(nextCommand);
+	} else {
+		// bot.chat("Cola de comandos vacía."); // Opcional: mensaje de depuración
+	}
+}
+
+function addCommandToQueue(commandName, commandFn, args = [], username) {
+	const commandObj = {
+		name: commandName,
+		func: commandFn,
+		args: args,
+		username: username,
+	};
+
+	if (staying) {
+		bot.chat(
+			"Estoy en modo 'quedate', no puedo aceptar nuevos comandos de movimiento o acción."
+		);
+		return;
+	}
+
+	if (!currentCommand && !isBotDefendingItself) {
+		runCommand(commandObj);
+	} else {
+		commandQueue.push(commandObj);
+		bot.chat(
+			`Comando '${commandName}' agregado a la cola. Posición: ${commandQueue.length}.`
+		);
+	}
+}
+
+// --- Fin Funciones de Cola de Comandos ---
 
 // --- Funciones de Inventario (adaptadas del ejemplo) ---
 
@@ -569,8 +670,221 @@ async function craftItemCmd(itemName, amountStr) {
 // --- Fin Funciones de Inventario ---
 
 // **Acciones del bot según el chat**
+
+// Mover la lógica de "consigue" a su propia función para la cola
+async function executeConsigueCommand(userInputName, usernameForContext) {
+	const checkInterrupt = () => {
+		if (isBotDefendingItself) throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+	};
+
+	const englishName = blockTranslations[userInputName] || userInputName;
+	const blockType = bot.registry.blocksByName[englishName];
+
+	if (!blockType) {
+		bot.chat(`No reconozco el bloque "${userInputName}".`);
+		return; // Termina la ejecución de este comando
+	}
+
+	bot.chat(`Buscando ${userInputName} (como ${englishName})...`);
+	const blocks = bot.findBlocks({
+		matching: blockType.id,
+		maxDistance: 64,
+		count: 1,
+	});
+
+	if (blocks.length === 0) {
+		bot.chat(`No encontré bloques de ${userInputName} cerca.`);
+		return;
+	}
+
+	const targetBlockPosition = blocks[0];
+	let targetBlock = bot.blockAt(targetBlockPosition);
+
+	if (!targetBlock) {
+		bot.chat(
+			`El bloque de ${userInputName} en ${targetBlockPosition} ya no existe o es inaccesible.`
+		);
+		return;
+	}
+
+	bot.chat(
+		`Encontré ${userInputName} en ${targetBlockPosition.x}, ${targetBlockPosition.y}, ${targetBlockPosition.z}. Intentando ir y minarlo.`
+	);
+
+	const returnPosition = bot.entity.position.clone();
+
+	try {
+		checkInterrupt();
+		await bot.pathfinder.goto(
+			new GoalNear(
+				targetBlockPosition.x,
+				targetBlockPosition.y,
+				targetBlockPosition.z,
+				1
+			)
+		);
+		checkInterrupt();
+		bot.chat(`Llegué al bloque de ${userInputName}.`);
+
+		targetBlock = bot.blockAt(targetBlockPosition);
+		if (!targetBlock || targetBlock.type !== blockType.id) {
+			bot.chat("El bloque objetivo cambió o desapareció al llegar. Abortando.");
+			await bot.pathfinder.goto(
+				new GoalNear(returnPosition.x, returnPosition.y, returnPosition.z, 1)
+			); // Intenta regresar
+			checkInterrupt();
+			bot.chat("He vuelto (después de bloque desaparecido).");
+			return;
+		}
+
+		const creativeMode = bot.game.gameMode === "creative";
+		let canDigNow = creativeMode || bot.canDigBlock(targetBlock);
+
+		// Lógica mejorada para obtener herramientas si son necesarias
+		if (
+			!canDigNow && // Si aún no puede minar
+			targetBlock.material &&
+			bot.registry.materials[targetBlock.material]?.harvestTools && // Y el material requiere herramientas
+			!creativeMode // Y no está en modo creativo
+		) {
+			bot.chat(
+				`Necesito una herramienta adecuada para ${userInputName}. Verificando y obteniendo si es necesario...`
+			);
+
+			const potentialTools = [];
+			const materialName = targetBlock.name.toLowerCase();
+
+			// Determinar si un hacha es prioritaria
+			const needsAxe =
+				materialName.includes("log") ||
+				materialName.includes("planks") ||
+				materialName.includes("wood") ||
+				materialName.includes("fence") ||
+				materialName.includes("door") ||
+				materialName.includes("crafting_table") ||
+				materialName.includes("chest") ||
+				materialName.includes("bookshelf");
+
+			if (needsAxe) {
+				potentialTools.push({
+					name: "diamond_axe",
+					giveCmd: `minecraft:diamond_axe`,
+					type: "hacha",
+				});
+			}
+			// Siempre considerar un pico si se necesita una herramienta (a menos que el hacha ya haya funcionado)
+			potentialTools.push({
+				name: "diamond_pickaxe",
+				giveCmd: `minecraft:diamond_pickaxe`,
+				type: "pico",
+			});
+
+			for (const toolDetail of potentialTools) {
+				if (canDigNow) break; // Si una herramienta de una iteración anterior funcionó
+
+				let tool = itemByName(toolDetail.name);
+				if (!tool) {
+					bot.chat(
+						`No tengo ${toolDetail.type} de diamante (${toolDetail.name}). Intentando obtenerlo con /give...`
+					);
+					bot.chat(`/give ${bot.username} ${toolDetail.giveCmd}`);
+					await new Promise((resolve) => setTimeout(resolve, 2000)); // Esperar a que el ítem aparezca
+					checkInterrupt();
+					tool = itemByName(toolDetail.name); // Volver a verificar
+				}
+
+				if (tool) {
+					bot.chat(
+						`Tengo ${toolDetail.type} de diamante (${toolDetail.name}). Intentando equipar...`
+					);
+					await bot.equip(tool, "hand");
+					checkInterrupt();
+					if (bot.canDigBlock(targetBlock)) {
+						canDigNow = true;
+						bot.chat(`${toolDetail.type} de diamante equipado y es adecuado.`);
+						break; // Herramienta equipada y funciona
+					} else {
+						bot.chat(
+							`${toolDetail.type} de diamante equipado, pero no es el adecuado para este bloque o no es suficiente.`
+						);
+					}
+				} else {
+					bot.chat(
+						`No pude encontrar u obtener ${toolDetail.type} de diamante (${toolDetail.name}) después del intento de /give.`
+					);
+				}
+			}
+		}
+
+		if (canDigNow) {
+			checkInterrupt();
+			bot.chat(`Minando ${userInputName}...`);
+			await bot.dig(targetBlock);
+			// Esperar un momento para que el bot recoja el bloque minado
+			bot.chat("Esperando a recoger el bloque...");
+			await new Promise((resolve) => setTimeout(resolve, 1500)); // Espera 1.5 segundos
+			checkInterrupt();
+			bot.chat(`¡Miné ${userInputName}!`);
+		} else {
+			bot.chat(
+				`No puedo minar ${userInputName}. Puede que necesite una herramienta específica o no tenga permisos.`
+			);
+		}
+
+		bot.chat("Regresando a la posición original...");
+		await bot.pathfinder.goto(
+			new GoalNear(returnPosition.x, returnPosition.y, returnPosition.z, 1)
+		);
+		checkInterrupt();
+		bot.chat("He vuelto.");
+	} catch (err) {
+		if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) {
+			throw err; // Propagar para que runCommand lo maneje
+		}
+		// Si el error es por pathfinding interrumpido Y estamos en autodefensa, tratarlo como interrupción
+		if (
+			isBotDefendingItself &&
+			(err.message.toLowerCase().includes("pathfinding interrupted") ||
+				err.message.toLowerCase().includes("goal interrupted") || // For general goal interruptions
+				err.message.toLowerCase().includes("goalchanged") || // Specifically for "GoalChanged"
+				err.message.toLowerCase().includes("dig interrupted"))
+		) {
+			console.log(
+				"Comando 'consigue' interpretado como interrumpido por pathfinder/dig durante defensa."
+			);
+			throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+		}
+
+		console.error(
+			`Error en 'executeConsigueCommand' para ${userInputName}:`,
+			err
+		);
+		bot.chat(
+			`Ocurrió un error al intentar conseguir ${userInputName}: ${err.message}`
+		);
+		try {
+			bot.chat(
+				"Intentando regresar a la posición original después de un error..."
+			);
+			await bot.pathfinder.goto(
+				new GoalNear(returnPosition.x, returnPosition.y, returnPosition.z, 1)
+			);
+			// No necesitamos checkInterrupt() aquí ya que estamos en un bloque catch de error no relacionado con defensa.
+			bot.chat("He vuelto (después de error).");
+		} catch (returnErr) {
+			console.error(
+				"Error al intentar regresar después de un error en consigue:",
+				returnErr
+			);
+			bot.chat("No pude regresar a la posición original después del error.");
+		}
+		// No relanzar err directamente si queremos que el comando se considere fallido y no re-encolado
+		// a menos que sea INTERRUPTED_FOR_DEFENSE_ERROR
+	}
+}
+
+// **Acciones del bot según el chat**
 bot.on("chat", async (username, message) => {
-	console.log(username + " dice: " + message);
 	if (username === bot.username) return;
 
 	// Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
@@ -584,11 +898,22 @@ bot.on("chat", async (username, message) => {
 		const command = args.shift()?.toLowerCase(); // El primer elemento es el comando, el resto son argumentos. Convertir a minúsculas.
 
 		if (command === "sigueme") {
+			// Detener comandos actuales y limpiar cola para seguir
+			if (currentCommand) {
+				bot.pathfinder.stop();
+				bot.chat(`Comando '${currentCommand.name}' cancelado para seguirte.`);
+				currentCommand = null;
+			}
+			commandQueue = [];
+			staying = false;
+			isBotDefendingItself = false; // Salir de modo defensa si estaba activo
+
 			const player = bot.players[username];
 			if (player && player.entity) {
 				followingPlayer = player;
 				bot.chat(`¡Te seguiré, ${username}!`);
 				bot.pathfinder.setGoal(new GoalFollow(followingPlayer.entity, 1), true);
+				stopDefense(false); // Detener la protección de otro jugador si estaba activa
 			} else {
 				bot.chat(`No puedo encontrarte para seguirte, ${username}.`);
 			}
@@ -596,6 +921,15 @@ bot.on("chat", async (username, message) => {
 			staying = true;
 			bot.chat("¡Me quedaré aquí!");
 			bot.pathfinder.setGoal(null); // Detiene el movimiento
+			if (currentCommand) {
+				bot.chat(
+					`Comando '${currentCommand.name}' cancelado para quedarme quieto.`
+				);
+				// No se re-encola, "quedate" tiene prioridad
+				currentCommand = null;
+			}
+			commandQueue = []; // Limpiar la cola de comandos
+			bot.chat("Cola de comandos limpiada.");
 		} else if (command === "ven") {
 			const player = bot.players[username];
 			if (player && player.entity) {
@@ -607,6 +941,7 @@ bot.on("chat", async (username, message) => {
 						1
 					)
 				);
+				// "ven" podría ser un comando encolable si se desea
 				bot.chat(`¡Voy hacia ti, ${username}!`);
 			} else {
 				bot.chat("No puedo ir hacia ti porque no te encuentro.");
@@ -620,8 +955,15 @@ bot.on("chat", async (username, message) => {
 				if (isNaN(x) || isNaN(y) || isNaN(z)) {
 					bot.chat("Las coordenadas no son válidas.");
 				} else {
-					bot.pathfinder.setGoal(new GoalBlock(x, y, z));
-					bot.chat(`¡Voy a las coordenadas ${x}, ${y}, ${z}!`);
+					addCommandToQueue(
+						"ve_coords",
+						async (x, y, z) => {
+							bot.pathfinder.setGoal(new GoalBlock(x, y, z));
+							bot.chat(`¡Voy a las coordenadas ${x}, ${y}, ${z}!`); // Este chat es inmediato, el movimiento es asíncrono
+						},
+						[x, y, z],
+						username
+					);
 				}
 			} else if (args.length === 1) {
 				// !rodent ve <jugador>
@@ -640,27 +982,38 @@ bot.on("chat", async (username, message) => {
 				} else {
 					bot.chat(`No encuentro al jugador ${targetPlayer}.`);
 				}
+			} else if (args.length === 0 && followingPlayer) {
+				// !rodent ve (sin args, si está siguiendo a alguien)
+				// Ir hacia el jugador que está siguiendo actualmente
+				if (followingPlayer.entity) {
+					bot.pathfinder.setGoal(
+						new GoalNear(
+							followingPlayer.entity.position.x,
+							followingPlayer.entity.position.y,
+							followingPlayer.entity.position.z,
+							1
+						)
+					);
+					bot.chat(`¡Voy hacia ${followingPlayer.username}!`);
+				} else {
+					bot.chat(
+						`Estaba siguiendo a ${followingPlayer.username} pero ya no lo encuentro.`
+					);
+					followingPlayer = null;
+				}
 			} else {
 				bot.chat(
 					`Uso correcto: ${BOT_COMMAND_PREFIX}ve <x> <y> <z> o ${BOT_COMMAND_PREFIX}ve <jugador>`
 				);
 			}
 		} else if (command === "aplana") {
-			if (args.length === 1) {
-				const size = parseInt(args[0]);
-				if (isNaN(size) || size < 1 || size > 10) {
-					bot.chat(
-						`Indica un tamaño válido (1-10). Ejemplo: ${BOT_COMMAND_PREFIX}aplana 3`
-					);
-					return;
-				}
+			// Mover la lógica de "aplana" a su propia función para la cola
+			async function executeAplanаCommand(size, usernameForContext) {
 				bot.chat(
 					`¡Voy a aplanar un área de ${size}x${size} bloques alrededor mío!`
 				);
-				// Asegúrate de que el bot esté en el suelo o ajusta la lógica de 'y'
 				const botY = Math.floor(bot.entity.position.y);
 				for (let dy = -1; dy <= 0; dy++) {
-					// Aplanar al nivel de los pies y un bloque arriba si es necesario
 					for (
 						let dx = -Math.floor(size / 2);
 						dx <= Math.floor(size / 2);
@@ -671,15 +1024,22 @@ bot.on("chat", async (username, message) => {
 							dz <= Math.floor(size / 2);
 							dz++
 						) {
+							if (isBotDefendingItself)
+								throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR); // Verificar interrupción
 							const blockPos = bot.entity.position.offset(dx, dy, dz);
 							const block = bot.blockAt(blockPos);
 							if (block && block.name !== "air" && bot.canDigBlock(block)) {
 								try {
 									await bot.dig(block);
 								} catch (err) {
+									if (isBotDefendingItself)
+										throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
 									console.error(
 										`Error al picar bloque en ${blockPos}:`,
 										err.message
+									);
+									bot.chat(
+										`Error al picar ${block.displayName}: ${err.message}`
 									);
 								}
 							}
@@ -687,217 +1047,28 @@ bot.on("chat", async (username, message) => {
 					}
 				}
 				bot.chat("¡Área aplanada!");
+			}
+			if (args.length === 1) {
+				const size = parseInt(args[0]);
+				if (isNaN(size) || size < 1 || size > 10) {
+					bot.chat(
+						`Indica un tamaño válido (1-10). Ejemplo: ${BOT_COMMAND_PREFIX}aplana 3`
+					);
+					return;
+				}
+				addCommandToQueue("aplana", executeAplanаCommand, [size], username);
 			} else {
 				bot.chat(`Uso correcto: ${BOT_COMMAND_PREFIX}aplana <tamaño>`);
 			}
 		} else if (command === "consigue") {
-			// Comando mejorado: ir, minar (con /give si es necesario) y regresar.
 			if (args.length >= 1) {
 				const userInputName = args.join(" ").toLowerCase(); // Permite nombres con espacios y convierte a minúsculas
-				const englishName = blockTranslations[userInputName] || userInputName; // Usa traducción o el input original
-				const blockType = bot.registry.blocksByName[englishName];
-
-				if (!blockType) {
-					bot.chat(`No reconozco el bloque "${userInputName}".`);
-					return;
-				}
-
-				bot.chat(`Buscando ${userInputName} (como ${englishName})...`);
-				const blocks = bot.findBlocks({
-					matching: blockType.id,
-					maxDistance: 64, // Radio de búsqueda más práctico
-					count: 1, // Intentar conseguir un bloque a la vez
-				});
-
-				if (blocks.length === 0) {
-					bot.chat(`No encontré bloques de ${userInputName} cerca.`);
-					return;
-				}
-
-				const targetBlockPosition = blocks[0];
-				let targetBlock = bot.blockAt(targetBlockPosition);
-
-				if (!targetBlock) {
-					bot.chat(
-						`El bloque de ${userInputName} en ${targetBlockPosition} ya no existe o es inaccesible.`
-					);
-					return;
-				}
-
-				bot.chat(
-					`Encontré ${userInputName} en ${targetBlockPosition.x}, ${targetBlockPosition.y}, ${targetBlockPosition.z}. Intentando ir y minarlo.`
+				addCommandToQueue(
+					"consigue",
+					executeConsigueCommand,
+					[userInputName],
+					username
 				);
-
-				const returnPosition = bot.entity.position.clone(); // Guardar posición para regresar
-
-				try {
-					// 1. Ir al bloque
-					await bot.pathfinder.goto(
-						new GoalNear(
-							targetBlockPosition.x,
-							targetBlockPosition.y,
-							targetBlockPosition.z,
-							1
-						)
-					); // Acercarse a 1 bloque de distancia
-					bot.chat(`Llegué al bloque de ${userInputName}.`);
-
-					// Refrescar la referencia al bloque por si el bot se movió ligeramente
-					targetBlock = bot.blockAt(targetBlockPosition);
-					if (!targetBlock || targetBlock.type !== blockType.id) {
-						bot.chat(
-							"El bloque objetivo cambió o desapareció al llegar. Abortando."
-						);
-						await bot.pathfinder.goto(
-							new GoalNear(
-								returnPosition.x,
-								returnPosition.y,
-								returnPosition.z,
-								1
-							)
-						);
-						bot.chat("He vuelto.");
-						return;
-					}
-
-					// 2. Verificar herramienta y minar
-					const creativeMode = bot.game.gameMode === "creative";
-					let canDigNow = creativeMode || bot.canDigBlock(targetBlock);
-
-					if (
-						!canDigNow &&
-						targetBlock.material &&
-						bot.registry.materials[targetBlock.material]?.harvestTools
-					) {
-						bot.chat(
-							`Necesito una herramienta para minar ${userInputName}. Buscando un pico...`
-						);
-						const pickaxeNames = [
-							"diamond_pickaxe",
-							"netherite_pickaxe",
-							"iron_pickaxe",
-							"stone_pickaxe",
-							"wooden_pickaxe",
-						];
-						let equippedSuitablePickaxe = false;
-
-						for (const pickName of pickaxeNames) {
-							const pickaxeItem = itemByName(pickName); // Usa tu función itemByName
-							if (pickaxeItem) {
-								bot.chat(`Encontré ${pickName}. Intentando equipar...`);
-								try {
-									await bot.equip(pickaxeItem, "hand");
-									bot.chat(`Equipé ${pickName}.`);
-									if (bot.canDigBlock(targetBlock)) {
-										// Re-verificar con el pico equipado
-										canDigNow = true;
-										equippedSuitablePickaxe = true;
-										break;
-									}
-								} catch (equipErr) {
-									bot.chat(`No pude equipar ${pickName}: ${equipErr.message}`);
-								}
-							}
-						}
-
-						if (!equippedSuitablePickaxe) {
-							bot.chat("/give RodentBot minecraft:diamond_pickaxe");
-
-							let attemptsToGetPickaxe = 0;
-							const maxAttemptsToGetPickaxe = 3; // Intentará 3 veces
-							const delayBetweenAttempts = 2000; // 2 segundos entre intentos
-
-							while (
-								attemptsToGetPickaxe < maxAttemptsToGetPickaxe &&
-								!canDigNow
-							) {
-								attemptsToGetPickaxe++;
-								bot.chat(
-									`Intento ${attemptsToGetPickaxe}/${maxAttemptsToGetPickaxe} para encontrar y equipar el pico de diamante...`
-								);
-								await new Promise((resolve) =>
-									setTimeout(resolve, delayBetweenAttempts)
-								);
-
-								const diamondPickaxe = itemByName("diamond_pickaxe");
-								if (diamondPickaxe) {
-									try {
-										await bot.equip(diamondPickaxe, "hand");
-										bot.chat("Pico de diamante equipado.");
-										if (bot.canDigBlock(targetBlock)) {
-											canDigNow = true; // Éxito, saldrá del bucle
-										} else {
-											bot.chat(
-												"Equipé el pico de diamante, pero aún no puedo minar el bloque. Verificando..."
-											);
-										}
-									} catch (equipErr) {
-										bot.chat(
-											`No pude equipar el pico de diamante: ${equipErr.message}`
-										);
-									}
-								} else {
-									bot.chat("Pico de diamante aún no encontrado en inventario.");
-								}
-							}
-
-							if (!canDigNow) {
-								bot.chat(
-									"No pude obtener o equipar el pico de diamante después de /give e intentos."
-								);
-							}
-						}
-					}
-
-					if (canDigNow) {
-						bot.chat(`Minando ${userInputName}...`);
-						await bot.dig(targetBlock);
-						bot.chat(`¡Miné ${userInputName}!`);
-					} else {
-						bot.chat(
-							`No puedo minar ${userInputName}. Puede que necesite una herramienta específica o no tenga permisos.`
-						);
-					}
-
-					// 3. Regresar
-					bot.chat("Regresando a la posición original...");
-					await bot.pathfinder.goto(
-						new GoalNear(
-							returnPosition.x,
-							returnPosition.y,
-							returnPosition.z,
-							1
-						)
-					);
-					bot.chat("He vuelto.");
-				} catch (err) {
-					console.error("Error en el comando 'consigue':", err);
-					bot.chat(
-						`Ocurrió un error al intentar conseguir ${userInputName}: ${err.message}`
-					);
-					try {
-						bot.chat(
-							"Intentando regresar a la posición original después de un error..."
-						);
-						await bot.pathfinder.goto(
-							new GoalNear(
-								returnPosition.x,
-								returnPosition.y,
-								returnPosition.z,
-								1
-							)
-						);
-						bot.chat("He vuelto (después de error).");
-					} catch (returnErr) {
-						console.error(
-							"Error al intentar regresar después de un error:",
-							returnErr
-						);
-						bot.chat(
-							"No pude regresar a la posición original después del error."
-						);
-					}
-				}
 			} else {
 				bot.chat(`Uso correcto: ${BOT_COMMAND_PREFIX}consigue <nombre_bloque>`);
 			}
@@ -914,6 +1085,13 @@ bot.on("chat", async (username, message) => {
 				bot.chat("Dejaré de estar quieto para poder protegerte mejor.");
 			}
 
+			// Detener comandos actuales y limpiar cola para proteger
+			if (currentCommand) {
+				bot.pathfinder.stop();
+				bot.chat(`Comando '${currentCommand.name}' cancelado para protegerte.`);
+				currentCommand = null;
+			}
+			commandQueue = [];
 			if (playerToDefend && playerToDefend.username === username) {
 				bot.chat(`Ya te estoy protegiendo, ${username}.`);
 				return;
@@ -1055,6 +1233,7 @@ bot.on("chat", async (username, message) => {
 		} else if (command === "reanuda") {
 			staying = false;
 			bot.chat("¡Listo para moverte de nuevo!");
+			runNextCommandFromQueue(); // Intentar procesar la cola si algo estaba pendiente
 		} else if (command === "chat") {
 			const prompt = args.join(" ").trim();
 			if (prompt) {
@@ -1070,40 +1249,61 @@ bot.on("chat", async (username, message) => {
 		} else if (command === "dame" || command === "tira") {
 			// Formato: !rodent tirar <nombre_item> [cantidad]
 			// Ej: !rodent tirar piedra 5  O  !rodent tirar diamante
-			if (args.length >= 1) {
-				const itemName = args[0].toLowerCase(); // Asegurar minúsculas para la traducción
-				const amountStr = args[1];
-
-				const player = bot.players[username];
+			async function executeDameCommand(
+				itemName,
+				amountStr,
+				usernameForContext
+			) {
+				const player = bot.players[usernameForContext];
 				if (player && player.entity) {
 					bot.chat(
-						`¡Entendido, ${username}! Voy hacia ti para darte ${itemName}.`
+						`¡Entendido, ${usernameForContext}! Voy hacia ti para darte ${itemName}.`
 					);
 					try {
+						if (isBotDefendingItself)
+							throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
 						await bot.pathfinder.goto(
-							new GoalNear( // Usamos GoalNear para acercarnos al jugador
+							new GoalNear(
 								player.entity.position.x,
 								player.entity.position.y,
 								player.entity.position.z,
-								2 // Distancia en bloques a la que se acercará (ej. 2 bloques)
+								2
 							)
 						);
-						bot.chat(`Llegué, ${username}. Aquí tienes tu ${itemName}.`);
-						await tossItemCmd(itemName, amountStr);
+						if (isBotDefendingItself)
+							throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+						bot.chat(
+							`Llegué, ${usernameForContext}. Aquí tienes tu ${itemName}.`
+						);
+						await tossItemCmd(itemName, amountStr); // tossItemCmd es síncrono o asíncrono? Asumimos que es rápido.
 					} catch (err) {
+						if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) throw err;
 						console.error(
-							`Error al ir hacia ${username} o tirar el ítem:`,
+							`Error al ir hacia ${usernameForContext} o tirar el ítem:`,
 							err
 						);
 						bot.chat(
 							`Tuve problemas para acercarme o tirar el ítem: ${err.message}. Lo soltaré aquí.`
 						);
-						await tossItemCmd(itemName, amountStr); // Intenta tirar el ítem en la posición actual como fallback
+						await tossItemCmd(itemName, amountStr);
 					}
 				} else {
-					bot.chat(`No te encuentro, ${username}. Dejaré ${itemName} aquí.`);
-					await tossItemCmd(itemName, amountStr); // Si no encuentra al jugador, tira el ítem donde está
+					bot.chat(
+						`No te encuentro, ${usernameForContext}. Dejaré ${itemName} aquí.`
+					);
+					await tossItemCmd(itemName, amountStr);
 				}
+			}
+
+			if (args.length >= 1) {
+				const itemName = args[0].toLowerCase(); // Asegurar minúsculas para la traducción
+				const amountStr = args[1];
+				addCommandToQueue(
+					"dame",
+					executeDameCommand,
+					[itemName, amountStr],
+					username
+				);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}dame <nombre_item> [cantidad]`);
 			}
@@ -1114,7 +1314,8 @@ bot.on("chat", async (username, message) => {
 			if (args.length === 2) {
 				const destination = args[0].toLowerCase();
 				const itemName = args[1];
-				await equipItemCmd(itemName, destination);
+				// equipItemCmd es rápido, no necesita estar en la cola principal de tareas largas
+				equipItemCmd(itemName, destination);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}equipar <destino> <nombre_item>`);
 			}
@@ -1123,7 +1324,8 @@ bot.on("chat", async (username, message) => {
 			// Ej: !rodent desequipar hand
 			if (args.length === 1) {
 				const destination = args[0].toLowerCase();
-				await unequipItemCmd(destination);
+				// unequipItemCmd es rápido
+				unequipItemCmd(destination);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}desequipar <destino>`);
 			}
@@ -1132,13 +1334,16 @@ bot.on("chat", async (username, message) => {
 			// Formato: !rodent usar [nombre_item]
 			// Ej: !rodent usar espada_diamante  O  !rodent usar (para usar lo que tenga en mano)
 			const itemName = args[0]; // Puede ser undefined si solo se escribe "!rodent usar"
+			// useItemCmd es relativamente rápido
+			useItemCmd(itemName); // No se pasa username, ya que usa el inventario del bot
 		} else if (command === "fabricar" || command === "craft") {
 			// Formato: !rodent fabricar <nombre_item> [cantidad]
 			// Ej: !rodent fabricar palo 4
 			if (args.length >= 1) {
 				const itemName = args[0];
 				const amountStr = args[1]; // Puede ser undefined
-				await craftItemCmd(itemName, amountStr);
+				// craftItemCmd puede implicar ir a una mesa, pero por ahora lo tratamos como rápido
+				craftItemCmd(itemName, amountStr);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}fabricar <nombre_item> [cantidad]`);
 			}
@@ -1161,6 +1366,11 @@ bot.on("death", () => {
 	if (selfDefenseIntervalId) {
 		clearInterval(selfDefenseIntervalId); // Detener el bucle de auto-defensa
 		selfDefenseIntervalId = null;
+		isBotDefendingItself = false; // Asegurarse de que el estado se reinicie
+	}
+	// Limpiar cola y comando actual si el bot muere
+	if (currentCommand) {
+		currentCommand = null;
 	}
 });
 
