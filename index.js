@@ -2,6 +2,7 @@ const mineflayer = require("mineflayer");
 const { pathfinder, Movements, goals } = require("mineflayer-pathfinder");
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
+const deathEvent = require("mineflayer-death-event"); // Importar el nuevo plugin
 const blockTranslations = require("./blockTranslations.js");
 const path = require("path");
 require("dotenv").config(); // Carga variables de entorno desde .env
@@ -52,21 +53,68 @@ let isBotDefendingItself = false; // true si el bot está activamente en modo de
 // Error específico para interrupciones
 const INTERRUPTED_FOR_DEFENSE_ERROR = "INTERRUPTED_FOR_DEFENSE";
 
+// Función para verificar si la tarea actual debe ser interrumpida por autodefensa
+const checkInterrupt = () => {
+	if (isBotDefendingItself) throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+};
+
+// --- Variables para Mensajes de Muerte con IA ---
+let capturedDeathMessage = null; // Almacenará la razón de la muerte capturada
+let isInitialSpawn = true; // Variable para rastrear si es el primer spawn
+
 let currentSelfDefenseTarget = null; // Para rastrear el objetivo actual en auto-defensa
 let announcedSelfDefenseActionForTarget = false; // Para saber si ya se anunció la acción para el objetivo actual
-bot.on("spawn", () => {
+
+bot.on("spawn", async () => {
+	// Convertir a async para esperar la respuesta de la IA
 	console.log("Bot conectado, obteniendo versión...");
 	console.log("Versión del bot:", bot.version);
 
-	// Cargar el plugin pathfinder después del spawn
+	// Cargar plugins después del spawn
 	bot.loadPlugin(pathfinder);
+	bot.loadPlugin(deathEvent); // Cargar el plugin de eventos de muerte
 
 	movements = new Movements(bot, bot.registry);
 	bot.pathfinder.setMovements(movements);
 
-	bot.chat("RodentBot reportandose para la aventura.");
+	if (isInitialSpawn) {
+		// Saludo inicial con IA (solo en el primer spawn)
+		try {
+			const greetingPrompt =
+				"Acabas de conectarte al servidor de minecraft RodentPlay. Genera un saludo corto, ingenioso y divertido para anunciar tu llegada en el chat de minecraft.";
+			const aiGreeting = await getShapeResponse(greetingPrompt);
+			bot.chat(aiGreeting);
+		} catch (e) {
+			console.error("Error obteniendo el saludo de la IA:", e);
+			bot.chat(
+				"RodentBot reportándose para la aventura. (Mi IA del saludo tuvo un pequeño hipo)."
+			); // Saludo de respaldo
+		} finally {
+			isInitialSpawn = false; // Marcar que el spawn inicial ya ocurrió
+		}
+	} else {
+		// Es un respawn después de una muerte
+		if (capturedDeathMessage) {
+			try {
+				const respawnPrompt = `Acabas de morir en minecraft. La última vez, esto fue lo que pasó (o lo que creo que pasó): "${capturedDeathMessage}". Escribe un mensaje corto, ingenioso o divertido acerca de tu muerte`;
+				const aiRespawnMessage = await getShapeResponse(respawnPrompt);
+				bot.chat(aiRespawnMessage);
+			} catch (e) {
+				console.error("Error obteniendo el mensaje de respawn de la IA:", e);
+				bot.chat(
+					`¡He vuelto! Aunque mi IA está un poco confundida sobre cómo pasó esto: "${capturedDeathMessage}"`
+				);
+			}
+			capturedDeathMessage = null; // Limpiar para la próxima vez
+		} else {
+			bot.chat(
+				"¡He vuelto! No estoy seguro de qué pasó, pero aquí estoy de nuevo."
+			);
+		}
+	}
 
 	// Iniciar el bucle de auto-defensa
+	if (selfDefenseIntervalId) clearInterval(selfDefenseIntervalId); // Limpiar cualquier intervalo anterior por si acaso
 	console.log("Iniciando bucle de auto-defensa...");
 	selfDefenseIntervalId = setInterval(selfDefenseLoop, SELF_DEFENSE_TICK_RATE);
 });
@@ -362,18 +410,14 @@ async function selfDefenseLoop() {
 		// o si no teníamos un currentSelfDefenseTarget "fijado".
 		if (
 			currentSelfDefenseTarget === null ||
-			currentSelfDefenseTarget.id !== nearestHostileToBot.id
+			currentSelfDefenseTarget.id !== nearestHostileToBot.id ||
+			!announcedSelfDefenseActionForTarget // Si no se ha anunciado para el target actual (ej. si el target sigue siendo el mismo pero el bot cambió de huir a luchar o viceversa)
 		) {
 			currentSelfDefenseTarget = nearestHostileToBot; // Actualizar/fijar el objetivo
-			announcedSelfDefenseActionForTarget = false;
+			announcedSelfDefenseActionForTarget = false; // Resetear para permitir un nuevo anuncio para este objetivo/situación
 		}
 
 		const bestSword = findBestSword();
-		console.log(
-			`[Self-Defense] Result of findBestSword(): ${
-				bestSword ? bestSword.name : "null"
-			}`
-		); // Log para ver qué se encontró
 
 		if (bestSword) {
 			// Luchar
@@ -384,16 +428,15 @@ async function selfDefenseLoop() {
 					} detectado! Preparándome para atacar...`
 				);
 				announcedSelfDefenseActionForTarget = true;
+				try {
+					await bot.equip(bestSword, "hand");
+				} catch (err) {
+					console.error("Error al equipar espada en auto-defensa:", err);
+					bot.chat("Tuve problemas para equipar mi espada.");
+				}
 			}
-			try {
-				await bot.equip(bestSword, "hand");
-				bot.pathfinder.setGoal(new GoalFollow(nearestHostileToBot, 1.5), true);
-				bot.attack(nearestHostileToBot, true);
-			} catch (err) {
-				console.error("Error al equipar o atacar en auto-defensa:", err);
-				bot.chat("Tuve problemas para equipar mi espada y defenderme.");
-				announcedSelfDefenseActionForTarget = false; // Permitir re-anunciar si hay error
-			}
+			bot.pathfinder.setGoal(new GoalFollow(nearestHostileToBot, 1.5), true);
+			bot.attack(nearestHostileToBot, true);
 		} else {
 			// Huir
 			if (!announcedSelfDefenseActionForTarget) {
@@ -403,16 +446,16 @@ async function selfDefenseLoop() {
 					} demasiado cerca! Huyendo...`
 				);
 				announcedSelfDefenseActionForTarget = true;
+				const fleeVector = bot.entity.position
+					.minus(nearestHostileToBot.position)
+					.normalize()
+					.scale(FLEE_DISTANCE);
+				const fleePosition = bot.entity.position.plus(fleeVector);
+				bot.pathfinder.setGoal(
+					new GoalNear(fleePosition.x, fleePosition.y, fleePosition.z, 1),
+					true // Objetivo dinámico por si el mob persigue
+				);
 			}
-			const fleeVector = bot.entity.position
-				.minus(nearestHostileToBot.position)
-				.normalize()
-				.scale(FLEE_DISTANCE);
-			const fleePosition = bot.entity.position.plus(fleeVector);
-			bot.pathfinder.setGoal(
-				new GoalNear(fleePosition.x, fleePosition.y, fleePosition.z, 1),
-				true // Objetivo dinámico por si el mob persigue
-			);
 		}
 	} else if (isBotDefendingItself) {
 		// No hay hostil cercano Y ESTABA en modo de autodefensa
@@ -420,7 +463,11 @@ async function selfDefenseLoop() {
 		currentSelfDefenseTarget = null;
 		announcedSelfDefenseActionForTarget = false;
 
-		bot.chat("Amenaza neutralizada. Limpiando objetivo de autodefensa.");
+		// Solo anunciar si previamente se había anunciado una acción para un objetivo
+		// Esto evita el mensaje si el bot solo entró en isBotDefendingItself pero no encontró/anunció un target.
+		bot.chat(
+			"Amenaza neutralizada o desaparecida. Limpiando objetivo de autodefensa."
+		);
 		// Detener cualquier movimiento o ataque relacionado con la autodefensa
 		if (bot.pathfinder.isMoving()) {
 			bot.pathfinder.stop();
@@ -449,12 +496,10 @@ async function selfDefenseLoop() {
 // --- Funciones de Cola de Comandos ---
 async function runCommand(commandObj) {
 	currentCommand = commandObj;
-	bot.chat(
-		`Ejecutando comando: '${commandObj.name}' para ${commandObj.username}.`
-	);
+	bot.chat(`A la orden ${commandObj.username}`);
 	try {
 		await commandObj.func(...commandObj.args, commandObj.username); // Pasar username para contexto si es necesario
-		bot.chat(`Comando '${commandObj.name}' completado.`);
+		bot.chat(`Misión '${commandObj.name}' completada.`);
 	} catch (err) {
 		if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) {
 			bot.chat(`Comando '${commandObj.name}' pausado debido a la autodefensa.`);
@@ -568,7 +613,7 @@ async function tossItemCmd(itemName, amountStr) {
 	const item = itemByName(itemName);
 
 	if (!item) {
-		bot.chat(`No tengo ${itemName}.`);
+		//bot.chat(`No tengo ${itemName}.`);
 	} else {
 		try {
 			if (amount) {
@@ -670,91 +715,40 @@ async function craftItemCmd(itemName, amountStr) {
 // --- Fin Funciones de Inventario ---
 
 // **Acciones del bot según el chat**
-
 // Mover la lógica de "consigue" a su propia función para la cola
-async function executeConsigueCommand(userInputName, usernameForContext) {
-	const checkInterrupt = () => {
-		if (isBotDefendingItself) throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
-	};
+async function executeConsigueCommand(
+	userInputName, // Nombre del bloque en español
+	quantityArg, // Cantidad solicitada (string o null)
+	usernameForContext // Nombre del jugador que dio la orden
+) {
+	// Helper function for tool logic, defined outside executeConsigueCommand for scope access
+	// targetBlockToMine: The block entity to check suitability against (can be null for upfront check)
+	// itemNameForChat: Name of the item being mined (for chat messages)
+	// requiredToolType: Optional string ('pickaxe', 'axe') to force checking/equipping a specific type upfront
+	async function ensureToolForBlock(
+		targetBlockToMine,
+		itemNameForChat,
+		requiredToolType = null
+	) {
+		// Returns true if a suitable tool is equipped and ready, false otherwise.
+		// bot.chat(`Necesito una herramienta adecuada para ${itemNameForChat}. Verificando...`);
+		const toolsToCheck = [];
 
-	const englishName = blockTranslations[userInputName] || userInputName;
-	const blockType = bot.registry.blocksByName[englishName];
-
-	if (!blockType) {
-		bot.chat(`No reconozco el bloque "${userInputName}".`);
-		return; // Termina la ejecución de este comando
-	}
-
-	bot.chat(`Buscando ${userInputName} (como ${englishName})...`);
-	const blocks = bot.findBlocks({
-		matching: blockType.id,
-		maxDistance: 64,
-		count: 1,
-	});
-
-	if (blocks.length === 0) {
-		bot.chat(`No encontré bloques de ${userInputName} cerca.`);
-		return;
-	}
-
-	const targetBlockPosition = blocks[0];
-	let targetBlock = bot.blockAt(targetBlockPosition);
-
-	if (!targetBlock) {
-		bot.chat(
-			`El bloque de ${userInputName} en ${targetBlockPosition} ya no existe o es inaccesible.`
-		);
-		return;
-	}
-
-	bot.chat(
-		`Encontré ${userInputName} en ${targetBlockPosition.x}, ${targetBlockPosition.y}, ${targetBlockPosition.z}. Intentando ir y minarlo.`
-	);
-
-	const returnPosition = bot.entity.position.clone();
-
-	try {
-		checkInterrupt();
-		await bot.pathfinder.goto(
-			new GoalNear(
-				targetBlockPosition.x,
-				targetBlockPosition.y,
-				targetBlockPosition.z,
-				1
-			)
-		);
-		checkInterrupt();
-		bot.chat(`Llegué al bloque de ${userInputName}.`);
-
-		targetBlock = bot.blockAt(targetBlockPosition);
-		if (!targetBlock || targetBlock.type !== blockType.id) {
-			bot.chat("El bloque objetivo cambió o desapareció al llegar. Abortando.");
-			await bot.pathfinder.goto(
-				new GoalNear(returnPosition.x, returnPosition.y, returnPosition.z, 1)
-			); // Intenta regresar
-			checkInterrupt();
-			bot.chat("He vuelto (después de bloque desaparecido).");
-			return;
-		}
-
-		const creativeMode = bot.game.gameMode === "creative";
-		let canDigNow = creativeMode || bot.canDigBlock(targetBlock);
-
-		// Lógica mejorada para obtener herramientas si son necesarias
-		if (
-			!canDigNow && // Si aún no puede minar
-			targetBlock.material &&
-			bot.registry.materials[targetBlock.material]?.harvestTools && // Y el material requiere herramientas
-			!creativeMode // Y no está en modo creativo
-		) {
-			bot.chat(
-				`Necesito una herramienta adecuada para ${userInputName}. Verificando y obteniendo si es necesario...`
-			);
-
-			const potentialTools = [];
-			const materialName = targetBlock.name.toLowerCase();
-
-			// Determinar si un hacha es prioritaria
+		if (requiredToolType === "pickaxe") {
+			toolsToCheck.push({
+				name: "diamond_pickaxe",
+				giveCmd: `minecraft:diamond_pickaxe`,
+				type: "pico",
+			});
+		} else if (requiredToolType === "axe") {
+			toolsToCheck.push({
+				name: "diamond_axe",
+				giveCmd: `minecraft:diamond_axe`,
+				type: "hacha",
+			});
+		} else if (targetBlockToMine) {
+			// If no specific type requested, use block material
+			const materialName = targetBlockToMine.name.toLowerCase();
 			const needsAxe =
 				materialName.includes("log") ||
 				materialName.includes("planks") ||
@@ -766,82 +760,372 @@ async function executeConsigueCommand(userInputName, usernameForContext) {
 				materialName.includes("bookshelf");
 
 			if (needsAxe) {
-				potentialTools.push({
+				toolsToCheck.push({
 					name: "diamond_axe",
 					giveCmd: `minecraft:diamond_axe`,
 					type: "hacha",
 				});
+				// Podríamos añadir pico como fallback si el hacha no funciona, pero por ahora lo mantenemos simple.
+			} else {
+				// Asumimos pico para otros bloques que requieren herramientas (minerales, piedra, etc.)
+				// Podríamos verificar blockMaterialInfo.harvestTools aquí de forma más precisa, pero el pico de diamante es común.
+				const blockMaterialInfo = targetBlockToMine.material
+					? bot.registry.materials[targetBlockToMine.material]
+					: null;
+				const requiresTool =
+					blockMaterialInfo &&
+					blockMaterialInfo.harvestTools &&
+					Object.keys(blockMaterialInfo.harvestTools).length > 0;
+				if (requiresTool) {
+					toolsToCheck.push({
+						name: "diamond_pickaxe",
+						giveCmd: `minecraft:diamond_pickaxe`,
+						type: "pico",
+					});
+				} else {
+					// El bloque no requiere una herramienta específica (tierra, arena, etc.). No necesitamos asegurar una herramienta aquí.
+					// La verificación bot.canDigBlock manejará si es minable con la mano.
+					// Devolvemos true inmediatamente ya que no se necesita una herramienta específica desde la perspectiva de esta función.
+					// Sin embargo, el código que llama espera que esto equipe *una* herramienta si es necesario.
+					// Ajustemos: si el bloque no requiere un tipo de herramienta específico manejado por esta función, devolvemos true.
+					return true; // El bloque no requiere un tipo de herramienta específico manejado por esta función
+				}
 			}
-			// Siempre considerar un pico si se necesita una herramienta (a menos que el hacha ya haya funcionado)
-			potentialTools.push({
-				name: "diamond_pickaxe",
-				giveCmd: `minecraft:diamond_pickaxe`,
-				type: "pico",
-			});
+		} else {
+			// targetBlockToMine es null, pero requiredToolType también es null. Esto no debería ocurrir si se llama correctamente.
+			// O tal vez significa "¿asegurar *una* herramienta"? Asumimos que si targetBlockToMine es null, requiredToolType DEBE especificarse.
+			console.error(
+				"ensureToolForBlock llamada con targetBlockToMine=null y requiredToolType=null. Esto es probablemente un error de lógica."
+			);
+			return false; // No se puede determinar la herramienta necesaria
+		}
 
-			for (const toolDetail of potentialTools) {
-				if (canDigNow) break; // Si una herramienta de una iteración anterior funcionó
+		for (const toolDetail of toolsToCheck) {
+			let tool = itemByName(toolDetail.name);
+			if (!tool) {
+				bot
+					.chat
+					//`No tengo ${toolDetail.type} de diamante (${toolDetail.name}). Intentando /give...`
+					();
+				bot.chat(`/give ${bot.username} ${toolDetail.giveCmd}`);
+				await new Promise((resolve) => setTimeout(resolve, 2000));
+				checkInterrupt();
+				tool = itemByName(toolDetail.name); // Verificar de nuevo después de /give
+			}
 
-				let tool = itemByName(toolDetail.name);
-				if (!tool) {
+			if (tool) {
+				await bot.equip(tool, "hand");
+				checkInterrupt();
+				// Si targetBlockToMine es null (verificación inicial), asumimos que equipar la herramienta de diamante es un éxito.
+				// Si targetBlockToMine no es null (verificación dentro del bucle), verificamos bot.canDigBlock.
+				if (!targetBlockToMine || bot.canDigBlock(targetBlockToMine)) {
+					if (targetBlockToMine) {
+						// Chatear esto si se verifica un bloque específico
+						bot
+							.chat
+							//`${toolDetail.type} de diamante equipado y es adecuado para ${itemNameForChat}.`
+							();
+					} else {
+						// Chatear esto si se llama inicialmente
+						bot.chat(`${toolDetail.type} de diamante equipado.`);
+					}
+					return true; // Herramienta encontrada/dada/equipada y es adecuada (o se asume adecuada inicialmente)
+				} else if (targetBlockToMine) {
+					// Herramienta equipada pero no adecuada para este bloque específico
+					// Este caso ocurre si, por ejemplo, equipamos un pico pero el bloque necesita un hacha.
+					// El bucle continuará si hay otras herramientasToCheck (por ejemplo, si añadimos hacha como respaldo después del pico).
+					// Pero con la lógica actual, toolsToCheck generalmente solo tendrá un tipo si requiredToolType es null.
+					// Por lo tanto, si equipamos un pico y el bloque necesita un hacha, este mensaje se mostrará y la función devolverá false después del bucle.
 					bot.chat(
-						`No tengo ${toolDetail.type} de diamante (${toolDetail.name}). Intentando obtenerlo con /give...`
+						`${toolDetail.type} de diamante equipado, pero no es el adecuado para ${itemNameForChat} o no es suficiente.`
 					);
-					bot.chat(`/give ${bot.username} ${toolDetail.giveCmd}`);
-					await new Promise((resolve) => setTimeout(resolve, 2000)); // Esperar a que el ítem aparezca
-					checkInterrupt();
-					tool = itemByName(toolDetail.name); // Volver a verificar
+					// Continuar el bucle para intentar la siguiente herramienta potencial si hay alguna (poco probable con la lógica actual de toolsToCheck)
+				}
+			} else {
+				bot.chat(
+					`No pude encontrar u obtener ${toolDetail.type} de diamante (${toolDetail.name}) después del intento de /give.`
+				);
+			}
+		}
+
+		// Si el bucle termina sin devolver true
+		if (targetBlockToMine) {
+			bot.chat(
+				`No se pudo equipar una herramienta adecuada para ${itemNameForChat}.`
+			);
+		} else {
+			// Este mensaje es para la verificación inicial donde se especificó requiredToolType.
+			bot.chat(`No se pudo equipar una herramienta de diamante adecuada.`);
+		}
+		return false;
+	}
+
+	// --- Initial Tool Check/Equip ---
+	// Asegurar que un pico de diamante esté equipado antes de comenzar cualquier tarea de minería.
+	// Esto maneja la solicitud del usuario de obtener/equipar el pico por adelantado.
+	bot.chat(
+		`Asegurando pico de diamante para la tarea de conseguir ${userInputName}...`
+	);
+	const hasRequiredToolEquipped = await ensureToolForBlock(
+		null,
+		"minar",
+		"pickaxe"
+	); // Pasar null para el bloque, 'minar' para el contexto del chat, 'pickaxe' como tipo requerido
+
+	if (!hasRequiredToolEquipped && bot.game.gameMode !== "creative") {
+		bot.chat(
+			`No pude asegurar un pico de diamante. No puedo minar ${userInputName}.`
+		);
+		return; // No se puede proceder sin la herramienta requerida en supervivencia
+	}
+	// En modo creativo, hasRequiredToolEquipped podría ser false, pero bot.canDigBlock seguirá siendo true.
+	// La lógica dentro del bucle manejará correctamente el modo creativo.
+	// --- Fin Verificación/Equipamiento Inicial de Herramienta ---
+
+	const englishName =
+		blockTranslations[userInputName.toLowerCase()] ||
+		userInputName.toLowerCase();
+	const blockType = bot.registry.blocksByName[englishName];
+
+	if (!blockType) {
+		bot.chat(`No reconozco el bloque "${userInputName}".`);
+		return;
+	}
+
+	let desiredQuantity;
+	let isSpecificQuantityRequested = false;
+	let blocksToProcess = [];
+
+	const returnPosition = bot.entity.position.clone();
+	const MAX_SEARCH_DISTANCE = 64;
+	let collectedAmount = 0;
+
+	try {
+		if (quantityArg) {
+			const parsedQuantity = parseInt(quantityArg, 10);
+			if (!isNaN(parsedQuantity) && parsedQuantity > 0) {
+				desiredQuantity = parsedQuantity;
+				isSpecificQuantityRequested = true;
+				bot.chat(`Objetivo: conseguir ${desiredQuantity} de ${userInputName}.`);
+			} else {
+				bot.chat(
+					`Cantidad "${quantityArg}" no válida. Buscaré los cercanos en una tanda.`
+				);
+				desiredQuantity = 0; // Será seteado por el conteo de la primera búsqueda
+				isSpecificQuantityRequested = false;
+			}
+		} else {
+			bot.chat(`Buscando ${userInputName} cercanos para minar (una tanda)...`);
+			desiredQuantity = 0; // Será seteado por el conteo de la primera búsqueda
+			isSpecificQuantityRequested = false;
+		}
+
+		while (true) {
+			// Bucle principal de recolección
+			checkInterrupt();
+
+			if (isSpecificQuantityRequested) {
+				if (collectedAmount >= desiredQuantity) break; // Objetivo cumplido
+
+				const remainingNeededSearch = Math.max(
+					1,
+					Math.min(desiredQuantity - collectedAmount, 20)
+				);
+				bot
+					.chat
+					//`Buscando hasta ${remainingNeededSearch} más de ${userInputName} (recolectado: ${collectedAmount}/${desiredQuantity})...`
+					();
+				blocksToProcess = bot.findBlocks({
+					matching: blockType.id,
+					maxDistance: MAX_SEARCH_DISTANCE,
+					count: remainingNeededSearch,
+				});
+
+				if (blocksToProcess.length === 0) {
+					bot.chat(
+						collectedAmount > 0
+							? `No encontré más ${userInputName}. Total recolectado: ${collectedAmount}.`
+							: `No encontré ${userInputName} para recolectar.`
+					);
+					break;
+				}
+				bot.chat(
+					`Esperame aqui, volere con ${blocksToProcess.length} bloque(s) de ${userInputName}...`
+				);
+			} else {
+				// No es cantidad específica: buscar una tanda y procesarla
+				if (collectedAmount > 0) break; // Solo buscar una vez si no hay cantidad
+
+				const initialSearchCount = 20;
+				bot.chat(`Buscando hasta ${initialSearchCount} de ${userInputName}...`);
+				blocksToProcess = bot.findBlocks({
+					matching: blockType.id,
+					maxDistance: MAX_SEARCH_DISTANCE,
+					count: initialSearchCount,
+				});
+
+				if (blocksToProcess.length === 0) {
+					bot.chat(`No encontré bloques de ${userInputName} cerca.`);
+					break;
+				}
+				desiredQuantity = blocksToProcess.length; // El objetivo es minar todos los encontrados
+				bot.chat(
+					`Esperame aqui, volere con ${blocksToProcess.length} bloque(s) de ${userInputName}...`
+				);
+				if (desiredQuantity === 0) break;
+			}
+
+			// Procesar los bloques en blocksToProcess
+			for (const targetBlockPosition of blocksToProcess) {
+				if (isSpecificQuantityRequested && collectedAmount >= desiredQuantity)
+					break;
+				if (!isSpecificQuantityRequested && collectedAmount >= desiredQuantity)
+					break;
+
+				checkInterrupt();
+				let currentBlockEntity = bot.blockAt(targetBlockPosition);
+				if (!currentBlockEntity || currentBlockEntity.type !== blockType.id) {
+					bot.chat(
+						`Bloque en ${targetBlockPosition} ya no es ${userInputName} o no existe. Saltando.`
+					);
+					continue;
 				}
 
-				if (tool) {
-					bot.chat(
-						`Tengo ${toolDetail.type} de diamante (${toolDetail.name}). Intentando equipar...`
+				// bot.chat(
+				// 	`Procesando ${userInputName} en ${targetBlockPosition.x}, ${targetBlockPosition.y}, ${targetBlockPosition.z}.`
+				// );
+
+				try {
+					await bot.pathfinder.goto(
+						new GoalNear(
+							targetBlockPosition.x,
+							targetBlockPosition.y,
+							targetBlockPosition.z,
+							1
+						)
 					);
-					await bot.equip(tool, "hand");
-					checkInterrupt();
-					if (bot.canDigBlock(targetBlock)) {
-						canDigNow = true;
-						bot.chat(`${toolDetail.type} de diamante equipado y es adecuado.`);
-						break; // Herramienta equipada y funciona
-					} else {
+				} catch (pathError) {
+					if (
+						pathError.message.toLowerCase().includes("goal interrupted") ||
+						pathError.message
+							.toLowerCase()
+							.includes("pathfinding interrupted") ||
+						pathError.message.toLowerCase().includes("goalchanged")
+					) {
+						if (isBotDefendingItself)
+							throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
 						bot.chat(
-							`${toolDetail.type} de diamante equipado, pero no es el adecuado para este bloque o no es suficiente.`
+							`Movimiento a ${userInputName} interrumpido (no por defensa). Saltando este bloque.`
 						);
+						continue;
+					}
+					console.error(
+						`Error de pathfinding no manejado a ${targetBlockPosition}:`,
+						pathError
+					);
+					// bot.chat(
+					// 	`Problema al llegar a ${userInputName} en ${targetBlockPosition}. Saltando.`
+					// );
+					continue;
+				}
+				checkInterrupt();
+
+				currentBlockEntity = bot.blockAt(targetBlockPosition); // Re-verificar tras moverse
+				if (!currentBlockEntity || currentBlockEntity.type !== blockType.id) {
+					bot.chat(
+						`Bloque en ${targetBlockPosition} cambió tras llegar. Saltando.`
+					);
+					continue;
+				}
+
+				const creativeMode = bot.game.gameMode === "creative";
+				let canDigNow = false; // Iniciar como false
+
+				if (creativeMode) {
+					canDigNow = true;
+				} else {
+					// En supervivencia, verificar si la herramienta *actualmente equipada* (debería ser pico de diamante de la verificación inicial)
+					// es suficiente para *este bloque específico*.
+					// Llamamos a ensureToolForBlock de nuevo, pero esta vez con el bloque específico.
+					// Esto maneja casos donde el bloque podría necesitar un hacha en lugar del pico equipado,
+					// o si el pico se rompió y necesita ser reemplazado.
+					canDigNow = await ensureToolForBlock(
+						currentBlockEntity,
+						userInputName
+					);
+
+					if (!canDigNow) {
+						// ensureToolForBlock ya chateó por qué falló (ej. no pudo obtener hacha, o pico no suficiente)
+						bot.chat(
+							`No puedo minar ${userInputName} en ${currentBlockEntity.position}. Saltando.`
+						);
+					}
+				}
+
+				if (canDigNow) {
+					checkInterrupt();
+					try {
+						await bot.dig(currentBlockEntity);
+						await new Promise((resolve) => setTimeout(resolve, 1500)); // Tiempo para recoger
+						checkInterrupt();
+						// Después de minar, verificar si la herramienta equipada se rompió
+						if (
+							bot.heldItem === null &&
+							hasRequiredToolEquipped &&
+							bot.game.gameMode !== "creative"
+						) {
+							bot.chat("¡Mi herramienta se rompió!");
+						}
+						collectedAmount++;
+						let progressMessage = `¡Miné ${userInputName}! Total recolectado: ${collectedAmount}`;
+						if (
+							isSpecificQuantityRequested ||
+							(!isSpecificQuantityRequested && desiredQuantity > 0)
+						) {
+							progressMessage += `/${desiredQuantity}`;
+						}
+						bot.chat(progressMessage + ".");
+					} catch (digError) {
+						if (digError.message.toLowerCase().includes("dig interrupted")) {
+							if (isBotDefendingItself)
+								throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+							bot.chat(
+								`Minado de ${userInputName} interrumpido (no por defensa). Saltando.`
+							);
+							continue;
+						}
+						console.error(
+							`Error al minar ${currentBlockEntity.name} en ${currentBlockEntity.position}:`,
+							digError
+						);
+						bot.chat(
+							`Error al minar ${userInputName}: ${digError.message}. Saltando.`
+						);
+						continue;
 					}
 				} else {
 					bot.chat(
-						`No pude encontrar u obtener ${toolDetail.type} de diamante (${toolDetail.name}) después del intento de /give.`
+						`No puedo minar ${userInputName} en ${currentBlockEntity.position}. Saltando.`
 					);
+					continue;
 				}
+			} // Fin del bucle for (procesando blocksToProcess)
+
+			if (!isSpecificQuantityRequested) {
+				break; // Si no es cantidad específica, salir tras procesar la primera tanda
 			}
-		}
+		} // Fin del bucle while(true) de recolección
 
-		if (canDigNow) {
-			checkInterrupt();
-			bot.chat(`Minando ${userInputName}...`);
-			await bot.dig(targetBlock);
-			// Esperar un momento para que el bot recoja el bloque minado
-			bot.chat("Esperando a recoger el bloque...");
-			await new Promise((resolve) => setTimeout(resolve, 1500)); // Espera 1.5 segundos
-			checkInterrupt();
-			bot.chat(`¡Miné ${userInputName}!`);
-		} else {
-			bot.chat(
-				`No puedo minar ${userInputName}. Puede que necesite una herramienta específica o no tenga permisos.`
-			);
-		}
-
-		bot.chat("Regresando a la posición original...");
-		await bot.pathfinder.goto(
-			new GoalNear(returnPosition.x, returnPosition.y, returnPosition.z, 1)
+		bot.chat(
+			`Tarea de conseguir ${userInputName} finalizada. Total recolectado: ${collectedAmount}.`
 		);
-		checkInterrupt();
-		bot.chat("He vuelto.");
 	} catch (err) {
 		if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) {
+			bot.chat(
+				`Tarea 'consigue ${userInputName}' pausada por autodefensa. Recolectado: ${collectedAmount}.`
+			);
 			throw err; // Propagar para que runCommand lo maneje
 		}
-		// Si el error es por pathfinding interrumpido Y estamos en autodefensa, tratarlo como interrupción
 		if (
 			isBotDefendingItself &&
 			(err.message.toLowerCase().includes("pathfinding interrupted") ||
@@ -860,26 +1144,24 @@ async function executeConsigueCommand(userInputName, usernameForContext) {
 			err
 		);
 		bot.chat(
-			`Ocurrió un error al intentar conseguir ${userInputName}: ${err.message}`
+			`Ocurrió un error al intentar conseguir ${userInputName}: ${err.message}. Recolectado: ${collectedAmount}.`
 		);
+	} finally {
+		bot.chat("Regresando a la posición original...");
 		try {
-			bot.chat(
-				"Intentando regresar a la posición original después de un error..."
-			);
 			await bot.pathfinder.goto(
 				new GoalNear(returnPosition.x, returnPosition.y, returnPosition.z, 1)
 			);
-			// No necesitamos checkInterrupt() aquí ya que estamos en un bloque catch de error no relacionado con defensa.
-			bot.chat("He vuelto (después de error).");
+			bot.chat("He vuelto.");
 		} catch (returnErr) {
 			console.error(
-				"Error al intentar regresar después de un error en consigue:",
+				"Error al intentar regresar después de 'consigue':",
 				returnErr
 			);
-			bot.chat("No pude regresar a la posición original después del error.");
+			bot.chat(
+				"No pude regresar a la posición original después de la tarea de conseguir."
+			);
 		}
-		// No relanzar err directamente si queremos que el comando se considere fallido y no re-encolado
-		// a menos que sea INTERRUPTED_FOR_DEFENSE_ERROR
 	}
 }
 
@@ -1061,17 +1343,30 @@ bot.on("chat", async (username, message) => {
 				bot.chat(`Uso correcto: ${BOT_COMMAND_PREFIX}aplana <tamaño>`);
 			}
 		} else if (command === "consigue") {
-			if (args.length >= 1) {
-				const userInputName = args.join(" ").toLowerCase(); // Permite nombres con espacios y convierte a minúsculas
-				addCommandToQueue(
-					"consigue",
-					executeConsigueCommand,
-					[userInputName],
-					username
+			if (args.length === 0) {
+				bot.chat(
+					`Uso correcto: ${BOT_COMMAND_PREFIX}consigue <nombre_bloque> [cantidad]`
 				);
-			} else {
-				bot.chat(`Uso correcto: ${BOT_COMMAND_PREFIX}consigue <nombre_bloque>`);
+				return;
 			}
+
+			let itemName;
+			let quantityArg = null;
+
+			const lastArg = args[args.length - 1];
+			if (args.length > 1 && !isNaN(parseInt(lastArg))) {
+				quantityArg = lastArg;
+				itemName = args.slice(0, -1).join(" ").toLowerCase();
+			} else {
+				itemName = args.join(" ").toLowerCase();
+			}
+
+			addCommandToQueue(
+				"consigue",
+				executeConsigueCommand,
+				[itemName, quantityArg],
+				username
+			);
 		} else if (command === "protegeme") {
 			const player = bot.players[username];
 			if (!player || !player.entity) {
@@ -1360,17 +1655,48 @@ bot.on("chat", async (username, message) => {
 });
 
 // Eventos adicionales
-bot.on("death", () => {
-	bot.chat("¡Oh no! Volveré pronto.");
+bot.on("death", async () => {
+	console.log(`[Death System] El bot ha muerto. Salud: ${bot.health}`);
+
+	// Detener acciones actuales
 	stopDefense(false); // Detener la defensa si el bot muere, sin notificar al jugador (ya está muerto)
 	if (selfDefenseIntervalId) {
 		clearInterval(selfDefenseIntervalId); // Detener el bucle de auto-defensa
 		selfDefenseIntervalId = null;
 		isBotDefendingItself = false; // Asegurarse de que el estado se reinicie
+		currentSelfDefenseTarget = null;
 	}
+
 	// Limpiar cola y comando actual si el bot muere
 	if (currentCommand) {
+		bot.pathfinder.stop(); // Detener cualquier pathfinding del comando actual
+		console.log(
+			`[Death System] Comando actual '${currentCommand.name}' limpiado debido a la muerte.`
+		);
 		currentCommand = null;
+	}
+	commandQueue = []; // Limpiar toda la cola de comandos
+	console.log("[Death System] Cola de comandos limpiada.");
+	bot.pathfinder.setGoal(null); // Limpiar explícitamente cualquier objetivo de pathfinder activo
+	console.log("[Death System] Estado general limpiado tras la muerte.");
+
+	// Establecer un mensaje de muerte por defecto.
+	// El plugin 'mineflayer-death-event' lo sobrescribirá si detecta un mensaje específico.
+	capturedDeathMessage = "Desaparecí misteriosamente... ¡pero he vuelto!";
+	console.log(
+		`[Death System] Mensaje de muerte por defecto establecido: "${capturedDeathMessage}"`
+	);
+});
+
+// Manejar el evento del plugin mineflayer-death-event
+bot.on("death_event", (victim, killer, message) => {
+	// victim y killer son entidades, message es el string del mensaje de muerte
+	if (victim && victim.username === bot.username && message) {
+		capturedDeathMessage = message; // Sobrescribir con el mensaje específico del plugin
+		// Loguear en consola la razón de la muerte capturada
+		console.log(
+			`[Death Event Plugin] Razón de muerte específica capturada para ${bot.username}: "${capturedDeathMessage}"`
+		);
 	}
 });
 
