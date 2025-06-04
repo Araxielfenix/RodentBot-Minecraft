@@ -1359,39 +1359,229 @@ bot.on("chat", async (username, message) => {
 			}
 		} else if (command === "aplana") {
 			// Mover la lógica de "aplana" a su propia función para la cola
-			async function executeAplanаCommand(size, usernameForContext) {
+			async function executeAplanaCommand(
+				length,
+				width,
+				heightArg,
+				usernameForContext
+			) {
+				let yOffsetsToClear = [];
+				let heightDescription = "";
+
+				if (heightArg === undefined) {
+					yOffsetsToClear = [0, -1]; // Comportamiento por defecto
+					heightDescription = "2 niveles (pies y debajo)";
+				} else {
+					const heightVal = parseInt(heightArg);
+					// La validación de NaN y rango ya se hizo antes de encolar.
+					if (heightVal > 0) {
+						for (let y = 0; y < heightVal; y++) yOffsetsToClear.push(y);
+						heightDescription = `${heightVal} nivel(es) hacia arriba (desde los pies)`;
+					} else if (heightVal < 0) {
+						for (let y = 0; y >= heightVal; y--) yOffsetsToClear.push(y);
+						heightDescription = `${
+							Math.abs(heightVal) + 1
+						} nivel(es) hacia abajo (desde los pies)`;
+					} else {
+						// heightVal === 0
+						yOffsetsToClear.push(0);
+						heightDescription = "solo el nivel de los pies";
+					}
+				}
+
 				bot.chat(
-					`¡Voy a aplanar un área de ${size}x${size} bloques alrededor mío!`
+					`¡Voy a aplanar un área de ${length}x${width} bloques, altura: ${heightDescription}!`
 				);
-				const botY = Math.floor(bot.entity.position.y);
-				for (let dy = -1; dy <= 0; dy++) {
-					for (
-						let dx = -Math.floor(size / 2);
-						dx <= Math.floor(size / 2);
-						dx++
-					) {
-						for (
-							let dz = -Math.floor(size / 2);
-							dz <= Math.floor(size / 2);
-							dz++
-						) {
-							if (isBotDefendingItself)
-								throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR); // Verificar interrupción
-							const blockPos = bot.entity.position.offset(dx, dy, dz);
+
+				// Calcular rangos para dx y dz para centrar el área en el bot
+				// dx para length (eje X), dz para width (eje Z)
+				const minDx = -Math.floor(length / 2);
+				const maxDx = Math.floor((length - 1) / 2);
+				const minDz = -Math.floor(width / 2);
+				const maxDz = Math.floor((width - 1) / 2);
+
+				for (const yOffset of yOffsetsToClear) {
+					for (let dx = minDx; dx <= maxDx; dx++) {
+						for (let dz = minDz; dz <= maxDz; dz++) {
+							// No más condición de círculo, ahora es un rectángulo
+							checkInterrupt();
+							const blockPos = bot.entity.position.offset(dx, yOffset, dz);
 							const block = bot.blockAt(blockPos);
-							if (block && block.name !== "air" && bot.canDigBlock(block)) {
-								try {
-									await bot.dig(block);
-								} catch (err) {
-									if (isBotDefendingItself)
-										throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
-									console.error(
-										`Error al picar bloque en ${blockPos}:`,
-										err.message
-									);
-									bot.chat(
-										`Error al picar ${block.displayName}: ${err.message}`
-									);
+
+							if (block && block.name !== "air") {
+								let idealToolName = null; // Será 'diamond_axe', 'diamond_shovel', 'diamond_pickaxe' o null
+								// Asegurarse de que block.material existe y es una clave válida en bot.registry.materials
+								const blockMaterial =
+									block.material && bot.registry.materials[block.material]
+										? bot.registry.materials[block.material].name // Usar el nombre del material si está disponible
+										: null; // e.g., 'wood', 'dirt', 'rock', 'sand', 'plant'
+								const blockName = block.name.toLowerCase(); // Para casos específicos como menas
+
+								// Determinar la herramienta ideal basada en el material del bloque
+								// Estas listas pueden ajustarse según se necesite más precisión
+								const axeMaterials = [
+									"wood",
+									"leaves",
+									"plant",
+									"pumpkin",
+									"web",
+									"wool",
+									"banner",
+									"coral",
+									"hay_block",
+									"honey_block",
+									"slime_block",
+									"scaffolding",
+								];
+								const shovelMaterials = [
+									"dirt",
+									"sand",
+									"grass",
+									"gravel",
+									"clay",
+									"snow",
+									"mycelium",
+									"farmland",
+									"path",
+									"podzol",
+									"soul_sand",
+									"soul_soil",
+									"concrete_powder",
+								];
+								const pickaxeMaterials = [
+									"rock",
+									"stone",
+									"metal",
+									"anvil",
+									"ice",
+									"piston",
+									"brick",
+									"netherrack",
+									"end_stone",
+									"obsidian",
+									"furnace",
+									"dispenser",
+									"dropper",
+									"concrete",
+									"terracotta",
+									"shulker_box",
+									"chest",
+									"ender_chest",
+									"beacon",
+									"enchanting_table",
+									"brewing_stand",
+									"hopper",
+								];
+
+								if (
+									blockMaterial &&
+									axeMaterials.some((matKeyword) =>
+										blockMaterial.includes(matKeyword)
+									)
+								) {
+									idealToolName = "diamond_axe";
+								} else if (
+									blockMaterial &&
+									shovelMaterials.some((matKeyword) =>
+										blockMaterial.includes(matKeyword)
+									)
+								) {
+									idealToolName = "diamond_shovel";
+								} else if (
+									blockName.includes("ore") ||
+									(blockMaterial &&
+										pickaxeMaterials.some((matKeyword) =>
+											blockMaterial.includes(matKeyword)
+										))
+								) {
+									// 'brick' es material para nether_brick y brick_block. 'rock' para stone, cobblestone, etc.
+									idealToolName = "diamond_pickaxe";
+								} else {
+									// Fallback si el material no coincide con las listas principales,
+									// pero el nombre del bloque sugiere una herramienta.
+									// Esto es útil si `blockMaterial` es null o no es informativo.
+									if (
+										blockName.includes("log") ||
+										blockName.includes("planks") ||
+										blockName.includes("wood")
+									) {
+										idealToolName = "diamond_axe";
+									} else if (
+										blockName.includes("dirt") ||
+										blockName.includes("sand") ||
+										blockName.includes("gravel") ||
+										blockName.includes("grass")
+									) {
+										idealToolName = "diamond_shovel";
+									} else if (
+										blockName.includes("stone") ||
+										blockName.includes("cobble") ||
+										blockName.includes("brick") ||
+										blockName.includes("netherrack") ||
+										blockName.includes("obsidian")
+									) {
+										idealToolName = "diamond_pickaxe";
+									}
+								}
+
+								let canDigThisBlock = false;
+								const creativeMode = bot.game.gameMode === "creative";
+
+								if (creativeMode) {
+									canDigThisBlock = true; // En creativo, siempre se puede minar.
+								} else if (idealToolName) {
+									// Si se identificó una herramienta ideal
+									let toolItem = itemByName(idealToolName);
+
+									// Si no tiene la herramienta ideal en mano, intentar obtenerla/equiparla
+									if (!bot.heldItem || bot.heldItem.name !== idealToolName) {
+										if (!toolItem) {
+											// No está en el inventario
+											// console.log(`[Aplanar] No tengo ${idealToolName}. Intentando /give...`);
+											bot.chat(
+												`/give ${bot.username} minecraft:${idealToolName}`
+											);
+											await new Promise((resolve) => setTimeout(resolve, 1000)); // Esperar a que aparezca el ítem
+											checkInterrupt();
+											toolItem = itemByName(idealToolName);
+										}
+										if (toolItem) {
+											// Si ahora lo tiene (o ya estaba en inventario)
+											await bot.equip(toolItem, "hand");
+											checkInterrupt();
+										}
+									}
+									// Verificar si con la herramienta (idealmente) equipada puede minar
+									if (
+										bot.heldItem &&
+										bot.heldItem.name === idealToolName &&
+										bot.canDigBlock(block)
+									) {
+										canDigThisBlock = true;
+									}
+								} else {
+									// No se identificó herramienta ideal (ej. flores), intentar con mano/herramienta actual
+									if (bot.canDigBlock(block)) {
+										canDigThisBlock = true;
+									}
+								}
+
+								if (canDigThisBlock) {
+									try {
+										await bot.dig(block);
+										// Pequeña pausa para que el bloque se actualice en el servidor y cliente.
+										// No es tanto para recoger ítems en 'aplana' ya que el bot está encima.
+										await new Promise((resolve) => setTimeout(resolve, 50));
+										checkInterrupt();
+									} catch (err) {
+										if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR)
+											throw err;
+										// No enviar chat por cada error de excavación para no spamear al usuario.
+										// Los errores se loguearán en la consola del bot si es necesario.
+										// console.error(`[Aplanar] Error al picar bloque ${block.displayName} en ${blockPos}: ${err.message}`);
+									}
+								} else if (!creativeMode) {
+									// console.log(`[Aplanar] No se pudo minar el bloque ${block.displayName} en ${block.position} con las herramientas disponibles.`);
 								}
 							}
 						}
@@ -1399,17 +1589,50 @@ bot.on("chat", async (username, message) => {
 				}
 				bot.chat("¡Área aplanada!");
 			}
-			if (args.length === 1) {
-				const size = parseInt(args[0]);
-				if (isNaN(size) || size < 1 || size > 10) {
+
+			if (args.length >= 2 && args.length <= 3) {
+				const length = parseInt(args[0]);
+				const width = parseInt(args[1]);
+				let heightArg = args[2] !== undefined ? parseInt(args[2]) : undefined;
+
+				if (
+					isNaN(length) ||
+					length < 1 ||
+					length > 10 ||
+					isNaN(width) ||
+					width < 1 ||
+					width > 10
+				) {
 					bot.chat(
-						`Indica un tamaño válido (1-10). Ejemplo: ${BOT_COMMAND_PREFIX}aplana 3`
+						`Largo y ancho deben ser números entre 1 y 10. Ejemplo: ${BOT_COMMAND_PREFIX}aplana 5 5`
 					);
 					return;
 				}
-				addCommandToQueue("aplana", executeAplanаCommand, [size], username);
+
+				if (heightArg !== undefined) {
+					if (isNaN(heightArg) || heightArg < -5 || heightArg > 5) {
+						bot.chat(
+							`Altura opcional debe ser un número entre -5 y 5. Ejemplo: ${BOT_COMMAND_PREFIX}aplana 5 5 2`
+						);
+						return;
+					}
+				}
+
+				addCommandToQueue(
+					"aplana",
+					executeAplanaCommand,
+					[length, width, heightArg],
+					username
+				);
 			} else {
-				bot.chat(`Uso correcto: ${BOT_COMMAND_PREFIX}aplana <tamaño>`);
+				bot.chat(
+					`Uso correcto: ${BOT_COMMAND_PREFIX}aplana <largo> <ancho> [alto_opcional]\n` +
+						`Largo/Ancho: 1-10. Alto: -5 a 5.\n` +
+						`Si no se da alto, se aplanan 2 niveles (pies y debajo).\n` +
+						`Si alto=N (>0): ${"`N`"} niveles hacia arriba desde los pies.\n` +
+						`Si alto=N (<0): ${"`|N|+1`"} niveles hacia abajo desde los pies.\n` +
+						`Si alto=0: solo nivel de los pies.`
+				);
 			}
 		} else if (command === "consigue") {
 			if (args.length === 0) {
@@ -1713,7 +1936,12 @@ bot.on("chat", async (username, message) => {
 			}
 		} else if (command === "ayuda") {
 			bot.chat(
-				`Comandos: ${BOT_COMMAND_PREFIX}sigueme, quedate, ven, ve, aplana, consigue, protegeme, no_protejas, reanuda, inventario, dame, equipar, desequipar, usar, fabricar, hambre. Para IA: ${BOT_COMMAND_PREFIX}chat <mensaje>.`
+				`Comandos: ${BOT_COMMAND_PREFIX}sigueme, quedate, ven, ve, aplana <largo> <ancho> [alto], ` +
+					`consigue <item> [cantidad], protegeme, no_protejas, reanuda, inventario, ` +
+					`dame <item> [cantidad], equipar <destino> <item>, desequipar <destino>, ` +
+					`usar [item], fabricar <item> [cantidad], hambre. ` +
+					`Para IA: ${BOT_COMMAND_PREFIX}chat <mensaje>. ` +
+					`Para ayuda de aplana: ${BOT_COMMAND_PREFIX}aplana`
 			);
 		} else if (command === "hambre") {
 			const foodLevel = bot.food;
