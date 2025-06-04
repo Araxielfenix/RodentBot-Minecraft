@@ -44,11 +44,15 @@ let selfDefenseIntervalId = null; // ID del intervalo para el bucle de auto-defe
 const SELF_DEFENSE_RADIUS = 10; // Radio más corto para amenazas directas al bot
 const SELF_DEFENSE_TICK_RATE = 1500; // Chequeo un poco menos frecuente que protegeme
 const FLEE_DISTANCE = 15; // Distancia a la que intentará huir
+const HUNGER_THRESHOLD = 15; // Nivel de comida por debajo del cual el bot intentará comer
+const AUTO_EAT_TICK_RATE = 5000; // Con qué frecuencia verificar si necesita comer (milisegundos)
 
 // --- Variables para la Cola de Comandos ---
 let commandQueue = [];
 let currentCommand = null; // { name: string, func: async function, args: array, username: string }
 let isBotDefendingItself = false; // true si el bot está activamente en modo de autodefensa
+let isEating = false; // true si el bot está actualmente en proceso de comer
+let autoEatIntervalId = null; // ID del intervalo para el bucle de auto-alimentación
 
 // Error específico para interrupciones
 const INTERRUPTED_FOR_DEFENSE_ERROR = "INTERRUPTED_FOR_DEFENSE";
@@ -117,6 +121,10 @@ bot.on("spawn", async () => {
 	if (selfDefenseIntervalId) clearInterval(selfDefenseIntervalId); // Limpiar cualquier intervalo anterior por si acaso
 	console.log("Iniciando bucle de auto-defensa...");
 	selfDefenseIntervalId = setInterval(selfDefenseLoop, SELF_DEFENSE_TICK_RATE);
+
+	// Iniciar el bucle de auto-alimentación
+	if (autoEatIntervalId) clearInterval(autoEatIntervalId);
+	autoEatIntervalId = setInterval(autoEatLoop, AUTO_EAT_TICK_RATE);
 });
 
 // Función para obtener respuesta de la IA
@@ -401,7 +409,7 @@ async function selfDefenseLoop() {
 		}
 
 		if (staying) {
-			bot.chat("¡Amenaza detectada! Anulando 'quedate' para defenderme.");
+			//bot.chat("¡Amenaza detectada! Anulando 'quedate' para defenderme.");
 			staying = false; // La autodefensa tiene prioridad sobre "quedate"
 		}
 		await ensureBestGear(true); // Asegurarse de tener el mejor equipo
@@ -422,11 +430,11 @@ async function selfDefenseLoop() {
 		if (bestSword) {
 			// Luchar
 			if (!announcedSelfDefenseActionForTarget) {
-				bot.chat(
-					`¡${
-						nearestHostileToBot.name || nearestHostileToBot.displayName
-					} detectado! Preparándome para atacar...`
-				);
+				// bot.chat(
+				// 	`¡${
+				// 		nearestHostileToBot.name || nearestHostileToBot.displayName
+				// 	} detectado! Preparándome para atacar...`
+				// );
 				announcedSelfDefenseActionForTarget = true;
 				try {
 					await bot.equip(bestSword, "hand");
@@ -465,9 +473,9 @@ async function selfDefenseLoop() {
 
 		// Solo anunciar si previamente se había anunciado una acción para un objetivo
 		// Esto evita el mensaje si el bot solo entró en isBotDefendingItself pero no encontró/anunció un target.
-		bot.chat(
-			"Amenaza neutralizada o desaparecida. Limpiando objetivo de autodefensa."
-		);
+		// bot.chat(
+		// 	"Amenaza neutralizada o desaparecida. Limpiando objetivo de autodefensa."
+		// );
 		// Detener cualquier movimiento o ataque relacionado con la autodefensa
 		if (bot.pathfinder.isMoving()) {
 			bot.pathfinder.stop();
@@ -492,6 +500,67 @@ async function selfDefenseLoop() {
 }
 
 // --- Fin Funciones de Auto-Defensa ---
+
+// --- Funciones de Auto-Alimentación ---
+function findFoodInInventory() {
+	const items = bot.inventory.items();
+	for (const item of items) {
+		// Los ítems comestibles tienen la propiedad foodPoints > 0
+		if (item.foodPoints && item.foodPoints > 0) {
+			return item;
+		}
+	}
+	return null;
+}
+
+async function autoEatLoop() {
+	// No intentar comer si:
+	// - Ya está comiendo.
+	// - No hay información de comida (bot no completamente cargado).
+	// - No tiene hambre (nivel de comida por encima del umbral).
+	// - Se está defendiendo activamente (la defensa tiene prioridad).
+	if (
+		isEating ||
+		!bot.food ||
+		bot.food >= HUNGER_THRESHOLD ||
+		isBotDefendingItself
+	) {
+		return;
+	}
+
+	isEating = true; // Marcar que está intentando comer
+
+	try {
+		let foodItem = findFoodInInventory();
+
+		// Si no hay comida en el inventario y no está en creativo, intentar darse pan
+		if (!foodItem && bot.game.gameMode !== "creative") {
+			bot.chat(`/give ${bot.username} minecraft:bread 1`); // El comando se envía, pero no hay mensaje del bot
+			await new Promise((resolve) => setTimeout(resolve, 1000)); // Esperar a que el ítem aparezca
+			foodItem = itemByName("bread"); // Buscar el pan recién obtenido
+		}
+
+		if (foodItem) {
+			try {
+				const currentHeldItem = bot.heldItem; // Guardar el ítem actual en mano
+				await bot.equip(foodItem, "hand");
+				await bot.consume();
+				// console.log(`[AutoEat] Comió ${foodItem.name}. Nivel de comida ahora: ${bot.food}`); // Para depuración
+				// Si tenía algo en la mano antes, intentar re-equiparlo (opcional, podría ser complejo si era una herramienta específica)
+				if (currentHeldItem && currentHeldItem.type !== foodItem.type) {
+					await bot.equip(currentHeldItem, "hand");
+				}
+			} catch (error) {
+				// console.error(`[AutoEat] Error al comer ${foodItem.name}:`, error.message); // Para depuración
+			}
+		}
+	} catch (error) {
+		// console.error("[AutoEat] Error en el bucle de auto-alimentación:", error); // Para depuración
+	} finally {
+		isEating = false; // Desmarcar después del intento, haya tenido éxito o no
+	}
+}
+// --- Fin Funciones de Auto-Alimentación ---
 
 // --- Funciones de Cola de Comandos ---
 async function runCommand(commandObj) {
@@ -1644,8 +1713,23 @@ bot.on("chat", async (username, message) => {
 			}
 		} else if (command === "ayuda") {
 			bot.chat(
-				`Comandos: ${BOT_COMMAND_PREFIX}sigueme, quedate, ven, ve, aplana, consigue, protegeme, no_protejas, reanuda, inventario, dame, equipar, desequipar, usar, fabricar. Para IA: ${BOT_COMMAND_PREFIX}chat <mensaje>.`
+				`Comandos: ${BOT_COMMAND_PREFIX}sigueme, quedate, ven, ve, aplana, consigue, protegeme, no_protejas, reanuda, inventario, dame, equipar, desequipar, usar, fabricar, hambre. Para IA: ${BOT_COMMAND_PREFIX}chat <mensaje>.`
 			);
+		} else if (command === "hambre") {
+			const foodLevel = bot.food;
+			const saturation = bot.foodSaturation; // Aunque no lo usemos directamente en el mensaje, es bueno saber que existe.
+
+			if (foodLevel >= 18) {
+				bot.chat(`No tengo hambre. Mi nivel de comida es ${foodLevel}/20.`);
+			} else if (foodLevel >= 10) {
+				bot.chat(
+					`Estoy un poco hambriento. Mi nivel de comida es ${foodLevel}/20.`
+				);
+			} else {
+				bot.chat(
+					`¡Tengo mucha hambre! Mi nivel de comida es ${foodLevel}/20. ¡Necesito comer algo!`
+				);
+			}
 		} else {
 			bot.chat(
 				`No reconozco el comando '${command}'. Usa '${BOT_COMMAND_PREFIX}ayuda' para ver los disponibles.`
@@ -1665,6 +1749,12 @@ bot.on("death", async () => {
 		selfDefenseIntervalId = null;
 		isBotDefendingItself = false; // Asegurarse de que el estado se reinicie
 		currentSelfDefenseTarget = null;
+	}
+	if (autoEatIntervalId) {
+		// Limpiar intervalo de auto-alimentación
+		clearInterval(autoEatIntervalId);
+		autoEatIntervalId = null;
+		isEating = false; // Resetear estado de alimentación
 	}
 
 	// Limpiar cola y comando actual si el bot muere
