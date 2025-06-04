@@ -2,6 +2,7 @@ const mineflayer = require("mineflayer");
 const { pathfinder, Movements, goals } = require("mineflayer-pathfinder");
 const { OpenAI } = require("openai");
 const { GoalBlock, GoalNear, GoalFollow } = goals;
+const Vec3 = require("vec3"); // Importar Vec3
 const deathEvent = require("mineflayer-death-event"); // Importar el nuevo plugin
 const blockTranslations = require("./blockTranslations.js");
 const path = require("path");
@@ -70,19 +71,16 @@ let currentSelfDefenseTarget = null; // Para rastrear el objetivo actual en auto
 let announcedSelfDefenseActionForTarget = false; // Para saber si ya se anunció la acción para el objetivo actual
 
 bot.on("spawn", async () => {
-	// Convertir a async para esperar la respuesta de la IA
 	console.log("Bot conectado, obteniendo versión...");
 	console.log("Versión del bot:", bot.version);
 
-	// Cargar plugins después del spawn
 	bot.loadPlugin(pathfinder);
-	bot.loadPlugin(deathEvent); // Cargar el plugin de eventos de muerte
+	bot.loadPlugin(deathEvent);
 
 	movements = new Movements(bot, bot.registry);
 	bot.pathfinder.setMovements(movements);
 
 	if (isInitialSpawn) {
-		// Saludo inicial con IA (solo en el primer spawn)
 		try {
 			const greetingPrompt =
 				"Acabas de conectarte al servidor de minecraft RodentPlay. Genera un saludo corto, ingenioso y divertido para anunciar tu llegada en el chat de minecraft.";
@@ -92,12 +90,11 @@ bot.on("spawn", async () => {
 			console.error("Error obteniendo el saludo de la IA:", e);
 			bot.chat(
 				"RodentBot reportándose para la aventura. (Mi IA del saludo tuvo un pequeño hipo)."
-			); // Saludo de respaldo
+			);
 		} finally {
-			isInitialSpawn = false; // Marcar que el spawn inicial ya ocurrió
+			isInitialSpawn = false;
 		}
 	} else {
-		// Es un respawn después de una muerte
 		if (capturedDeathMessage) {
 			try {
 				const respawnPrompt = `Acabas de morir en minecraft. La última vez, esto fue lo que pasó (o lo que creo que pasó): "${capturedDeathMessage}". Escribe un mensaje corto, ingenioso o divertido acerca de tu muerte`;
@@ -109,7 +106,7 @@ bot.on("spawn", async () => {
 					`¡He vuelto! Aunque mi IA está un poco confundida sobre cómo pasó esto: "${capturedDeathMessage}"`
 				);
 			}
-			capturedDeathMessage = null; // Limpiar para la próxima vez
+			capturedDeathMessage = null;
 		} else {
 			bot.chat(
 				"¡He vuelto! No estoy seguro de qué pasó, pero aquí estoy de nuevo."
@@ -117,17 +114,14 @@ bot.on("spawn", async () => {
 		}
 	}
 
-	// Iniciar el bucle de auto-defensa
-	if (selfDefenseIntervalId) clearInterval(selfDefenseIntervalId); // Limpiar cualquier intervalo anterior por si acaso
+	if (selfDefenseIntervalId) clearInterval(selfDefenseIntervalId);
 	console.log("Iniciando bucle de auto-defensa...");
 	selfDefenseIntervalId = setInterval(selfDefenseLoop, SELF_DEFENSE_TICK_RATE);
 
-	// Iniciar el bucle de auto-alimentación
 	if (autoEatIntervalId) clearInterval(autoEatIntervalId);
 	autoEatIntervalId = setInterval(autoEatLoop, AUTO_EAT_TICK_RATE);
 });
 
-// Función para obtener respuesta de la IA
 async function getShapeResponse(prompt) {
 	try {
 		const response = await shapes_client.chat.completions.create({
@@ -141,37 +135,26 @@ async function getShapeResponse(prompt) {
 	}
 }
 
-// Función para detener la defensa
 function stopDefense(informPlayer = true) {
 	if (defenseIntervalId) {
 		clearInterval(defenseIntervalId);
 		defenseIntervalId = null;
 	}
-	if (playerToDefend && informPlayer) {
-		// El mensaje de que se detiene la protección se maneja usualmente en el comando que llama a stopDefense
-		// bot.chat(`Defensa detenida para ${playerToDefend.username}.`);
-	}
 	playerToDefend = null;
-	// No detenemos el pathfinder aquí para no interferir con otros comandos como "sigueme"
 }
 
-// --- Funciones de Auto-Defensa ---
-
-// Función para encontrar la mejor espada (se mantiene para la lógica de huida)
 function findBestSword() {
 	const swordNames = [
 		"diamond_sword",
 		"netherite_sword",
 		"iron_sword",
 		"stone_sword",
-		"golden_sword", // Añadido por si acaso
+		"golden_sword",
 		"wooden_sword",
 	];
 	for (const swordName of swordNames) {
 		const sword = itemByName(swordName);
-		if (sword) {
-			return sword;
-		}
+		if (sword) return sword;
 	}
 	return null;
 }
@@ -183,7 +166,6 @@ async function ensureBestGear(forSelfDefense = false) {
 		legs: "leggings",
 		feet: "boots",
 	};
-	// De mejor a peor. Ajusta si usas mods con otros tiers.
 	const armorTiers = [
 		"netherite",
 		"diamond",
@@ -200,19 +182,13 @@ async function ensureBestGear(forSelfDefense = false) {
 		"golden_sword",
 		"wooden_sword",
 	];
+	const giveCommandUser = bot.username;
 
-	const chatPrefix = forSelfDefense
-		? "[Auto-Defensa Gear] "
-		: "[Protección Gear] ";
-	const giveCommandUser = bot.username; // El bot se da los ítems a sí mismo
-
-	// Equipar Armadura
 	for (const slot in armorSlots) {
-		const pieceType = armorSlots[slot]; // ej: "helmet"
+		const pieceType = armorSlots[slot];
 		let bestPieceForSlot = null;
-		let currentBestTierIndex = armorTiers.length; // Peor que el peor
+		let currentBestTierIndex = armorTiers.length;
 
-		// 1. Verificar qué tiene equipado actualmente
 		const equippedItem = bot.inventory.slots[bot.getEquipmentDestSlot(slot)];
 		if (equippedItem) {
 			for (let i = 0; i < armorTiers.length; i++) {
@@ -224,28 +200,23 @@ async function ensureBestGear(forSelfDefense = false) {
 			}
 		}
 
-		// 2. Buscar en inventario una pieza mejor que la equipada (o si no hay nada equipado)
 		for (let i = 0; i < currentBestTierIndex; i++) {
-			// Solo buscar tiers mejores
 			const tier = armorTiers[i];
 			const fullItemName = `${tier}_${pieceType}`;
 			const itemInInventory = itemByName(fullItemName);
 			if (itemInInventory) {
 				bestPieceForSlot = itemInInventory;
-				currentBestTierIndex = i; // Actualizar al mejor encontrado
-				// console.log(`${chatPrefix}Encontró ${fullItemName} en inventario para ${slot}.`);
-				break; // Encontró la mejor posible en inventario para este slot
+				currentBestTierIndex = i;
+				break;
 			}
 		}
 
-		// 3. Si no tiene armadura de diamante o mejor (o nada), y no está en creativo, intentar /give
 		const diamondTierIndex = armorTiers.indexOf("diamond");
 		if (
 			currentBestTierIndex > diamondTierIndex &&
 			bot.game.gameMode !== "creative"
 		) {
 			const diamondPieceName = `diamond_${pieceType}`;
-			// Solo intentar /give si no tiene ya la pieza de diamante o mejor
 			let hasDiamondOrBetter = false;
 			if (bestPieceForSlot) {
 				const tierOfBestPiece = bestPieceForSlot.name.split("_")[0];
@@ -253,54 +224,40 @@ async function ensureBestGear(forSelfDefense = false) {
 					hasDiamondOrBetter = true;
 				}
 			}
-
 			if (!hasDiamondOrBetter) {
 				bot.chat(`/give ${giveCommandUser} minecraft:${diamondPieceName}`);
-				await new Promise((resolve) => setTimeout(resolve, 1500)); // Esperar a que el ítem aparezca
-
+				await new Promise((resolve) => setTimeout(resolve, 1500));
 				const newItem = itemByName(diamondPieceName);
 				if (newItem) {
 					bestPieceForSlot = newItem;
-					currentBestTierIndex = diamondTierIndex;
-					// console.log(`${chatPrefix}Obtuvo ${diamondPieceName} vía /give.`);
 				} else {
-					console.log(
-						`${chatPrefix}No pude obtener ${diamondPieceName} con /give.`
-					);
+					console.log(`No pude obtener ${diamondPieceName} con /give.`);
 				}
 			}
 		}
 
-		// 4. Equipar la mejor armadura encontrada/obtenida (si es diferente de la actual o no había nada)
 		if (
 			bestPieceForSlot &&
 			(!equippedItem || equippedItem.type !== bestPieceForSlot.type)
 		) {
 			try {
-				// console.log(`${chatPrefix}Intentando equipar ${bestPieceForSlot.displayName} en ${slot}. Actual: ${equippedItem ? equippedItem.displayName : 'nada'}`);
 				await bot.equip(bestPieceForSlot, slot);
-				// Se comenta para reducir spam. El jugador verá el cambio visualmente.
-				// bot.chat(
-				// 	`${chatPrefix}Equipado ${bestPieceForSlot.displayName} en ${slot}.`
-				// );
 			} catch (err) {
 				bot.chat(
-					`${chatPrefix}Error al equipar ${bestPieceForSlot.displayName} en ${slot}: ${err.message}`
+					`Error al equipar ${bestPieceForSlot.displayName} en ${slot}: ${err.message}`
 				);
 				console.error(
-					`${chatPrefix}Error equipando ${bestPieceForSlot.name} en ${slot}:`,
+					`Error equipando ${bestPieceForSlot.name} en ${slot}:`,
 					err
 				);
 			}
 		}
 	}
 
-	// Equipar Espada
 	let bestSword = null;
 	let currentBestSwordTierIndex = weaponTiers.length;
-
-	// 1. Verificar espada actual
 	const currentWeapon = bot.heldItem;
+
 	if (currentWeapon) {
 		for (let i = 0; i < weaponTiers.length; i++) {
 			if (currentWeapon.name === weaponTiers[i]) {
@@ -311,20 +268,16 @@ async function ensureBestGear(forSelfDefense = false) {
 		}
 	}
 
-	// 2. Buscar mejor espada en inventario
 	for (let i = 0; i < currentBestSwordTierIndex; i++) {
-		// Solo buscar tiers mejores
 		const swordName = weaponTiers[i];
 		const itemInInventory = itemByName(swordName);
 		if (itemInInventory) {
 			bestSword = itemInInventory;
 			currentBestSwordTierIndex = i;
-			// console.log(`${chatPrefix}Encontró ${swordName} en inventario.`);
 			break;
 		}
 	}
 
-	// 3. Si no tiene espada de diamante o mejor, y no está en creativo, intentar /give
 	const diamondSwordTierIndex = weaponTiers.indexOf("diamond_sword");
 	if (
 		currentBestSwordTierIndex > diamondSwordTierIndex &&
@@ -332,7 +285,6 @@ async function ensureBestGear(forSelfDefense = false) {
 	) {
 		let hasDiamondOrBetterSword = false;
 		if (bestSword) {
-			// Para espadas, el nombre es directo, no "tier_sword"
 			if (weaponTiers.indexOf(bestSword.name) <= diamondSwordTierIndex) {
 				hasDiamondOrBetterSword = true;
 			}
@@ -340,37 +292,26 @@ async function ensureBestGear(forSelfDefense = false) {
 		if (!hasDiamondOrBetterSword) {
 			bot.chat(`/give ${giveCommandUser} minecraft:diamond_sword`);
 			await new Promise((resolve) => setTimeout(resolve, 1500));
-
 			const newSword = itemByName("diamond_sword");
 			if (newSword) {
 				bestSword = newSword;
-				currentBestSwordTierIndex = diamondSwordTierIndex;
-				// console.log(`${chatPrefix}Obtuvo diamond_sword vía /give.`);
 			} else {
-				console.log(`${chatPrefix}No pude obtener diamond_sword con /give.`);
+				console.log(`No pude obtener diamond_sword con /give.`);
 			}
 		}
 	}
 
-	// 4. Equipar la mejor espada
 	if (bestSword && (!currentWeapon || currentWeapon.type !== bestSword.type)) {
 		try {
-			// console.log(`${chatPrefix}Intentando equipar ${bestSword.displayName}. Actual: ${currentWeapon ? currentWeapon.displayName : 'nada'}`);
 			await bot.equip(bestSword, "hand");
-			// Se comenta para reducir spam.
-			// bot.chat(`${chatPrefix}Equipado ${bestSword.displayName} en mano.`);
 		} catch (err) {
-			bot.chat(
-				`${chatPrefix}Error al equipar ${bestSword.displayName}: ${err.message}`
-			);
-			console.error(`${chatPrefix}Error equipando ${bestSword.name}:`, err);
+			bot.chat(`Error al equipar ${bestSword.displayName}: ${err.message}`);
+			console.error(`Error equipando ${bestSword.name}:`, err);
 		}
 	}
 }
 
 async function selfDefenseLoop() {
-	// No hacer nada si el bot no está completamente cargado o no tiene entidad
-	// o si está en modo "quedate" y no queremos que la autodefensa lo mueva (esto se maneja más abajo)
 	if (!bot.entity || !bot.registry) return;
 
 	const commonHostilesString = process.env.COMMON_HOSTILES || "";
@@ -385,7 +326,6 @@ async function selfDefenseLoop() {
 	for (const entityId in bot.entities) {
 		const entity = bot.entities[entityId];
 		if (!entity || entity === bot.entity) continue;
-
 		const entityNameLower = entity.name ? entity.name.toLowerCase() : null;
 		if (entityNameLower && commonHostiles.includes(entityNameLower)) {
 			const distanceSq = bot.entity.position.distanceSquared(entity.position);
@@ -398,43 +338,29 @@ async function selfDefenseLoop() {
 
 	if (nearestHostileToBot) {
 		if (!isBotDefendingItself) {
-			// Primera vez que detecta una amenaza en este "encuentro"
 			isBotDefendingItself = true;
 			if (currentCommand) {
 				bot.chat(
 					`¡Autodefensa activada! Pausando comando actual: ${currentCommand.name}.`
 				);
-				bot.pathfinder.stop(); // Intentar interrumpir el pathfinding del comando actual
+				bot.pathfinder.stop();
 			}
 		}
+		if (staying) staying = false;
+		await ensureBestGear(true);
 
-		if (staying) {
-			//bot.chat("¡Amenaza detectada! Anulando 'quedate' para defenderme.");
-			staying = false; // La autodefensa tiene prioridad sobre "quedate"
-		}
-		await ensureBestGear(true); // Asegurarse de tener el mejor equipo
-
-		// Comprobar si el nearestHostileToBot es diferente del currentSelfDefenseTarget
-		// o si no teníamos un currentSelfDefenseTarget "fijado".
 		if (
 			currentSelfDefenseTarget === null ||
 			currentSelfDefenseTarget.id !== nearestHostileToBot.id ||
-			!announcedSelfDefenseActionForTarget // Si no se ha anunciado para el target actual (ej. si el target sigue siendo el mismo pero el bot cambió de huir a luchar o viceversa)
+			!announcedSelfDefenseActionForTarget
 		) {
-			currentSelfDefenseTarget = nearestHostileToBot; // Actualizar/fijar el objetivo
-			announcedSelfDefenseActionForTarget = false; // Resetear para permitir un nuevo anuncio para este objetivo/situación
+			currentSelfDefenseTarget = nearestHostileToBot;
+			announcedSelfDefenseActionForTarget = false;
 		}
 
 		const bestSword = findBestSword();
-
 		if (bestSword) {
-			// Luchar
 			if (!announcedSelfDefenseActionForTarget) {
-				// bot.chat(
-				// 	`¡${
-				// 		nearestHostileToBot.name || nearestHostileToBot.displayName
-				// 	} detectado! Preparándome para atacar...`
-				// );
 				announcedSelfDefenseActionForTarget = true;
 				try {
 					await bot.equip(bestSword, "hand");
@@ -446,7 +372,6 @@ async function selfDefenseLoop() {
 			bot.pathfinder.setGoal(new GoalFollow(nearestHostileToBot, 1.5), true);
 			bot.attack(nearestHostileToBot, true);
 		} else {
-			// Huir
 			if (!announcedSelfDefenseActionForTarget) {
 				bot.chat(
 					`¡${
@@ -461,64 +386,34 @@ async function selfDefenseLoop() {
 				const fleePosition = bot.entity.position.plus(fleeVector);
 				bot.pathfinder.setGoal(
 					new GoalNear(fleePosition.x, fleePosition.y, fleePosition.z, 1),
-					true // Objetivo dinámico por si el mob persigue
+					true
 				);
 			}
 		}
 	} else if (isBotDefendingItself) {
-		// No hay hostil cercano Y ESTABA en modo de autodefensa
 		isBotDefendingItself = false;
 		currentSelfDefenseTarget = null;
 		announcedSelfDefenseActionForTarget = false;
-
-		// Solo anunciar si previamente se había anunciado una acción para un objetivo
-		// Esto evita el mensaje si el bot solo entró en isBotDefendingItself pero no encontró/anunció un target.
-		// bot.chat(
-		// 	"Amenaza neutralizada o desaparecida. Limpiando objetivo de autodefensa."
-		// );
-		// Detener cualquier movimiento o ataque relacionado con la autodefensa
-		if (bot.pathfinder.isMoving()) {
-			bot.pathfinder.stop();
-		}
-		bot.pathfinder.setGoal(null); // Asegurarse de que no haya metas de pathfinding de defensa
-		console.log(
-			"DEBUG: bot object before stopAttacking:",
-			typeof bot.stopAttacking,
-			bot.stopAttacking
-		); // Línea de depuración
+		if (bot.pathfinder.isMoving()) bot.pathfinder.stop();
+		bot.pathfinder.setGoal(null);
 		if (typeof bot.stopAttacking === "function") {
-			bot.stopAttacking(); // Detener cualquier ataque en curso
+			bot.stopAttacking();
 		} else {
-			console.error(
-				"ERROR: bot.stopAttacking no es una función. No se pudo detener el ataque explícitamente."
-			);
+			console.error("ERROR: bot.stopAttacking no es una función.");
 		}
-
-		// Intentar reanudar comandos en cola
 		runNextCommandFromQueue();
 	}
 }
 
-// --- Fin Funciones de Auto-Defensa ---
-
-// --- Funciones de Auto-Alimentación ---
 function findFoodInInventory() {
 	const items = bot.inventory.items();
 	for (const item of items) {
-		// Los ítems comestibles tienen la propiedad foodPoints > 0
-		if (item.foodPoints && item.foodPoints > 0) {
-			return item;
-		}
+		if (item.foodPoints && item.foodPoints > 0) return item;
 	}
 	return null;
 }
 
 async function autoEatLoop() {
-	// No intentar comer si:
-	// - Ya está comiendo.
-	// - No hay información de comida (bot no completamente cargado).
-	// - No tiene hambre (nivel de comida por encima del umbral).
-	// - Se está defendiendo activamente (la defensa tiene prioridad).
 	if (
 		isEating ||
 		!bot.food ||
@@ -527,54 +422,44 @@ async function autoEatLoop() {
 	) {
 		return;
 	}
-
-	isEating = true; // Marcar que está intentando comer
-
+	isEating = true;
 	try {
 		let foodItem = findFoodInInventory();
-
-		// Si no hay comida en el inventario y no está en creativo, intentar darse pan
 		if (!foodItem && bot.game.gameMode !== "creative") {
-			bot.chat(`/give ${bot.username} minecraft:bread 1`); // El comando se envía, pero no hay mensaje del bot
-			await new Promise((resolve) => setTimeout(resolve, 1000)); // Esperar a que el ítem aparezca
-			foodItem = itemByName("bread"); // Buscar el pan recién obtenido
+			bot.chat(`/give ${bot.username} minecraft:bread 1`);
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+			foodItem = itemByName("bread");
 		}
-
 		if (foodItem) {
 			try {
-				const currentHeldItem = bot.heldItem; // Guardar el ítem actual en mano
+				const currentHeldItem = bot.heldItem;
 				await bot.equip(foodItem, "hand");
 				await bot.consume();
-				// console.log(`[AutoEat] Comió ${foodItem.name}. Nivel de comida ahora: ${bot.food}`); // Para depuración
-				// Si tenía algo en la mano antes, intentar re-equiparlo (opcional, podría ser complejo si era una herramienta específica)
 				if (currentHeldItem && currentHeldItem.type !== foodItem.type) {
 					await bot.equip(currentHeldItem, "hand");
 				}
 			} catch (error) {
-				// console.error(`[AutoEat] Error al comer ${foodItem.name}:`, error.message); // Para depuración
+				// Silently fail for now, or log to console if preferred
 			}
 		}
 	} catch (error) {
-		// console.error("[AutoEat] Error en el bucle de auto-alimentación:", error); // Para depuración
+		// Silently fail for now, or log to console if preferred
 	} finally {
-		isEating = false; // Desmarcar después del intento, haya tenido éxito o no
+		isEating = false;
 	}
 }
-// --- Fin Funciones de Auto-Alimentación ---
 
-// --- Funciones de Cola de Comandos ---
 async function runCommand(commandObj) {
 	currentCommand = commandObj;
 	bot.chat(`A la orden ${commandObj.username}`);
 	try {
-		await commandObj.func(...commandObj.args, commandObj.username); // Pasar username para contexto si es necesario
+		await commandObj.func(...commandObj.args, commandObj.username);
 		bot.chat(`Misión '${commandObj.name}' completada.`);
 	} catch (err) {
 		if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) {
 			bot.chat(`Comando '${commandObj.name}' pausado debido a la autodefensa.`);
 			if (currentCommand) {
-				// Asegurarse de que currentCommand no haya sido nulificado
-				commandQueue.unshift(currentCommand); // Poner de nuevo al inicio de la cola
+				commandQueue.unshift(currentCommand);
 			}
 		} else {
 			bot.chat(`Error durante el comando '${commandObj.name}': ${err.message}`);
@@ -587,22 +472,16 @@ async function runCommand(commandObj) {
 	} finally {
 		currentCommand = null;
 		if (!isBotDefendingItself) {
-			// Solo procesar el siguiente si no estamos en medio de una defensa
 			runNextCommandFromQueue();
 		}
 	}
 }
 
 function runNextCommandFromQueue() {
-	if (currentCommand || isBotDefendingItself || staying) {
-		// No iniciar un nuevo comando si ya hay uno, o si se está defendiendo, o si está en "quedate"
-		return;
-	}
+	if (currentCommand || isBotDefendingItself || staying) return;
 	if (commandQueue.length > 0) {
 		const nextCommand = commandQueue.shift();
 		runCommand(nextCommand);
-	} else {
-		// bot.chat("Cola de comandos vacía."); // Opcional: mensaje de depuración
 	}
 }
 
@@ -613,14 +492,12 @@ function addCommandToQueue(commandName, commandFn, args = [], username) {
 		args: args,
 		username: username,
 	};
-
 	if (staying) {
 		bot.chat(
 			"Estoy en modo 'quedate', no puedo aceptar nuevos comandos de movimiento o acción."
 		);
 		return;
 	}
-
 	if (!currentCommand && !isBotDefendingItself) {
 		runCommand(commandObj);
 	} else {
@@ -631,28 +508,17 @@ function addCommandToQueue(commandName, commandFn, args = [], username) {
 	}
 }
 
-// --- Fin Funciones de Cola de Comandos ---
-
-// --- Funciones de Inventario (adaptadas del ejemplo) ---
-
 function itemToString(item) {
-	if (item) {
-		return `${item.name} x ${item.count}`;
-	} else {
-		return "(nada)";
-	}
+	return item ? `${item.name} x ${item.count}` : "(nada)";
 }
 
 function itemByName(name) {
-	// Intenta buscar primero usando la traducción si existe, sino el nombre directo
 	const translatedName =
 		blockTranslations[name.toLowerCase()] || name.toLowerCase();
 	const items = bot.inventory.items();
-	// En versiones 1.9+, el slot 45 es la mano secundaria (off-hand)
 	if (bot.registry.isNewerOrEqualTo("1.9") && bot.inventory.slots[45]) {
 		items.push(bot.inventory.slots[45]);
 	}
-	// Busca primero por el nombre traducido, luego por el original si no se encuentra
 	let foundItem = items.find(
 		(item) => item.name.toLowerCase() === translatedName
 	);
@@ -667,34 +533,26 @@ function itemByName(name) {
 function sayItems() {
 	const items = bot.inventory.items();
 	if (bot.registry.isNewerOrEqualTo("1.9") && bot.inventory.slots[45]) {
-		items.push(bot.inventory.slots[45]); // Incluir item en la mano secundaria
+		items.push(bot.inventory.slots[45]);
 	}
 	const output = items.map(itemToString).join(", ");
-	if (output) {
-		bot.chat("Inventario: " + output);
-	} else {
-		bot.chat("Inventario vacío.");
-	}
+	bot.chat(output ? "Inventario: " + output : "Inventario vacío.");
 }
 
 async function tossItemCmd(itemName, amountStr) {
 	const amount = amountStr ? parseInt(amountStr, 10) : null;
 	const item = itemByName(itemName);
-
-	if (!item) {
-		//bot.chat(`No tengo ${itemName}.`);
-	} else {
-		try {
-			if (amount) {
-				await bot.toss(item.type, null, amount);
-				bot.chat(`Tiré ${amount} x ${itemName}.`);
-			} else {
-				await bot.tossStack(item); // Tira todo el stack
-				bot.chat(`Tiré ${item.count} x ${itemName}.`);
-			}
-		} catch (err) {
-			bot.chat(`No pude tirar el ítem: ${err.message}`);
+	if (!item) return;
+	try {
+		if (amount) {
+			await bot.toss(item.type, null, amount);
+			bot.chat(`Tiré ${amount} x ${itemName}.`);
+		} else {
+			await bot.tossStack(item);
+			bot.chat(`Tiré ${item.count} x ${itemName}.`);
 		}
+	} catch (err) {
+		bot.chat(`No pude tirar el ítem: ${err.message}`);
 	}
 }
 
@@ -724,18 +582,16 @@ async function unequipItemCmd(destination) {
 async function useItemCmd(itemName) {
 	if (!itemName) {
 		bot.chat("Activando ítem en mano...");
-		bot.activateItem(); // Activa el ítem en la mano principal
-		// Para la mano secundaria: bot.activateItem(true)
+		bot.activateItem();
 		return;
 	}
-
 	const item = itemByName(itemName);
 	if (item) {
 		try {
 			bot.chat(`Intentando equipar y usar ${itemName}...`);
-			await bot.equip(item, "hand"); // Equipar en la mano principal
+			await bot.equip(item, "hand");
 			bot.chat(`Equipé ${itemName} en la mano.`);
-			bot.activateItem(); // Activar el ítem recién equipado
+			bot.activateItem();
 			bot.chat(`Usé ${itemName}.`);
 		} catch (err) {
 			bot.chat(`No pude equipar o usar ${itemName}: ${err.message}`);
@@ -748,24 +604,20 @@ async function useItemCmd(itemName) {
 async function craftItemCmd(itemName, amountStr) {
 	const amount = amountStr ? parseInt(amountStr, 10) : 1;
 	const itemToCraft = bot.registry.itemsByName[itemName.toLowerCase()];
-
 	if (!itemToCraft) {
 		bot.chat(`Ítem desconocido: ${itemName}`);
 		return;
 	}
-
 	const craftingTable = bot.findBlock({
 		matching: bot.registry.blocksByName.crafting_table.id,
-		maxDistance: 4, // Buscar mesa de crafteo cerca
+		maxDistance: 4,
 	});
-
 	const recipe = bot.recipesFor(
 		itemToCraft.id,
 		null,
 		1,
 		craftingTable ? craftingTable : null
 	)[0];
-
 	if (recipe) {
 		bot.chat(`Puedo fabricar ${itemName}. Intentando...`);
 		try {
@@ -781,28 +633,17 @@ async function craftItemCmd(itemName, amountStr) {
 	}
 }
 
-// --- Fin Funciones de Inventario ---
-
-// **Acciones del bot según el chat**
-// Mover la lógica de "consigue" a su propia función para la cola
 async function executeConsigueCommand(
-	userInputName, // Nombre del bloque en español
-	quantityArg, // Cantidad solicitada (string o null)
-	usernameForContext // Nombre del jugador que dio la orden
+	userInputName,
+	quantityArg,
+	usernameForContext
 ) {
-	// Helper function for tool logic, defined outside executeConsigueCommand for scope access
-	// targetBlockToMine: The block entity to check suitability against (can be null for upfront check)
-	// itemNameForChat: Name of the item being mined (for chat messages)
-	// requiredToolType: Optional string ('pickaxe', 'axe') to force checking/equipping a specific type upfront
 	async function ensureToolForBlock(
 		targetBlockToMine,
 		itemNameForChat,
 		requiredToolType = null
 	) {
-		// Returns true if a suitable tool is equipped and ready, false otherwise.
-		// bot.chat(`Necesito una herramienta adecuada para ${itemNameForChat}. Verificando...`);
 		const toolsToCheck = [];
-
 		if (requiredToolType === "pickaxe") {
 			toolsToCheck.push({
 				name: "diamond_pickaxe",
@@ -816,7 +657,6 @@ async function executeConsigueCommand(
 				type: "hacha",
 			});
 		} else if (targetBlockToMine) {
-			// If no specific type requested, use block material
 			const materialName = targetBlockToMine.name.toLowerCase();
 			const needsAxe =
 				materialName.includes("log") ||
@@ -827,17 +667,13 @@ async function executeConsigueCommand(
 				materialName.includes("crafting_table") ||
 				materialName.includes("chest") ||
 				materialName.includes("bookshelf");
-
 			if (needsAxe) {
 				toolsToCheck.push({
 					name: "diamond_axe",
 					giveCmd: `minecraft:diamond_axe`,
 					type: "hacha",
 				});
-				// Podríamos añadir pico como fallback si el hacha no funciona, pero por ahora lo mantenemos simple.
 			} else {
-				// Asumimos pico para otros bloques que requieren herramientas (minerales, piedra, etc.)
-				// Podríamos verificar blockMaterialInfo.harvestTools aquí de forma más precisa, pero el pico de diamante es común.
 				const blockMaterialInfo = targetBlockToMine.material
 					? bot.registry.materials[targetBlockToMine.material]
 					: null;
@@ -852,63 +688,35 @@ async function executeConsigueCommand(
 						type: "pico",
 					});
 				} else {
-					// El bloque no requiere una herramienta específica (tierra, arena, etc.). No necesitamos asegurar una herramienta aquí.
-					// La verificación bot.canDigBlock manejará si es minable con la mano.
-					// Devolvemos true inmediatamente ya que no se necesita una herramienta específica desde la perspectiva de esta función.
-					// Sin embargo, el código que llama espera que esto equipe *una* herramienta si es necesario.
-					// Ajustemos: si el bloque no requiere un tipo de herramienta específico manejado por esta función, devolvemos true.
-					return true; // El bloque no requiere un tipo de herramienta específico manejado por esta función
+					return true;
 				}
 			}
 		} else {
-			// targetBlockToMine es null, pero requiredToolType también es null. Esto no debería ocurrir si se llama correctamente.
-			// O tal vez significa "¿asegurar *una* herramienta"? Asumimos que si targetBlockToMine es null, requiredToolType DEBE especificarse.
 			console.error(
-				"ensureToolForBlock llamada con targetBlockToMine=null y requiredToolType=null. Esto es probablemente un error de lógica."
+				"ensureToolForBlock llamada con targetBlockToMine=null y requiredToolType=null."
 			);
-			return false; // No se puede determinar la herramienta necesaria
+			return false;
 		}
 
 		for (const toolDetail of toolsToCheck) {
 			let tool = itemByName(toolDetail.name);
 			if (!tool) {
-				bot
-					.chat
-					//`No tengo ${toolDetail.type} de diamante (${toolDetail.name}). Intentando /give...`
-					();
 				bot.chat(`/give ${bot.username} ${toolDetail.giveCmd}`);
 				await new Promise((resolve) => setTimeout(resolve, 2000));
 				checkInterrupt();
-				tool = itemByName(toolDetail.name); // Verificar de nuevo después de /give
+				tool = itemByName(toolDetail.name);
 			}
-
 			if (tool) {
 				await bot.equip(tool, "hand");
 				checkInterrupt();
-				// Si targetBlockToMine es null (verificación inicial), asumimos que equipar la herramienta de diamante es un éxito.
-				// Si targetBlockToMine no es null (verificación dentro del bucle), verificamos bot.canDigBlock.
 				if (!targetBlockToMine || bot.canDigBlock(targetBlockToMine)) {
-					if (targetBlockToMine) {
-						// Chatear esto si se verifica un bloque específico
-						bot
-							.chat
-							//`${toolDetail.type} de diamante equipado y es adecuado para ${itemNameForChat}.`
-							();
-					} else {
-						// Chatear esto si se llama inicialmente
+					if (!targetBlockToMine)
 						bot.chat(`${toolDetail.type} de diamante equipado.`);
-					}
-					return true; // Herramienta encontrada/dada/equipada y es adecuada (o se asume adecuada inicialmente)
+					return true;
 				} else if (targetBlockToMine) {
-					// Herramienta equipada pero no adecuada para este bloque específico
-					// Este caso ocurre si, por ejemplo, equipamos un pico pero el bloque necesita un hacha.
-					// El bucle continuará si hay otras herramientasToCheck (por ejemplo, si añadimos hacha como respaldo después del pico).
-					// Pero con la lógica actual, toolsToCheck generalmente solo tendrá un tipo si requiredToolType es null.
-					// Por lo tanto, si equipamos un pico y el bloque necesita un hacha, este mensaje se mostrará y la función devolverá false después del bucle.
 					bot.chat(
 						`${toolDetail.type} de diamante equipado, pero no es el adecuado para ${itemNameForChat} o no es suficiente.`
 					);
-					// Continuar el bucle para intentar la siguiente herramienta potencial si hay alguna (poco probable con la lógica actual de toolsToCheck)
 				}
 			} else {
 				bot.chat(
@@ -916,22 +724,14 @@ async function executeConsigueCommand(
 				);
 			}
 		}
-
-		// Si el bucle termina sin devolver true
-		if (targetBlockToMine) {
-			bot.chat(
-				`No se pudo equipar una herramienta adecuada para ${itemNameForChat}.`
-			);
-		} else {
-			// Este mensaje es para la verificación inicial donde se especificó requiredToolType.
-			bot.chat(`No se pudo equipar una herramienta de diamante adecuada.`);
-		}
+		bot.chat(
+			targetBlockToMine
+				? `No se pudo equipar una herramienta adecuada para ${itemNameForChat}.`
+				: `No se pudo equipar una herramienta de diamante adecuada.`
+		);
 		return false;
 	}
 
-	// --- Initial Tool Check/Equip ---
-	// Asegurar que un pico de diamante esté equipado antes de comenzar cualquier tarea de minería.
-	// Esto maneja la solicitud del usuario de obtener/equipar el pico por adelantado.
 	bot.chat(
 		`Asegurando pico de diamante para la tarea de conseguir ${userInputName}...`
 	);
@@ -939,23 +739,18 @@ async function executeConsigueCommand(
 		null,
 		"minar",
 		"pickaxe"
-	); // Pasar null para el bloque, 'minar' para el contexto del chat, 'pickaxe' como tipo requerido
-
+	);
 	if (!hasRequiredToolEquipped && bot.game.gameMode !== "creative") {
 		bot.chat(
 			`No pude asegurar un pico de diamante. No puedo minar ${userInputName}.`
 		);
-		return; // No se puede proceder sin la herramienta requerida en supervivencia
+		return;
 	}
-	// En modo creativo, hasRequiredToolEquipped podría ser false, pero bot.canDigBlock seguirá siendo true.
-	// La lógica dentro del bucle manejará correctamente el modo creativo.
-	// --- Fin Verificación/Equipamiento Inicial de Herramienta ---
 
 	const englishName =
 		blockTranslations[userInputName.toLowerCase()] ||
 		userInputName.toLowerCase();
 	const blockType = bot.registry.blocksByName[englishName];
-
 	if (!blockType) {
 		bot.chat(`No reconozco el bloque "${userInputName}".`);
 		return;
@@ -964,7 +759,6 @@ async function executeConsigueCommand(
 	let desiredQuantity;
 	let isSpecificQuantityRequested = false;
 	let blocksToProcess = [];
-
 	const returnPosition = bot.entity.position.clone();
 	const MAX_SEARCH_DISTANCE = 64;
 	let collectedAmount = 0;
@@ -980,36 +774,28 @@ async function executeConsigueCommand(
 				bot.chat(
 					`Cantidad "${quantityArg}" no válida. Buscaré los cercanos en una tanda.`
 				);
-				desiredQuantity = 0; // Será seteado por el conteo de la primera búsqueda
+				desiredQuantity = 0;
 				isSpecificQuantityRequested = false;
 			}
 		} else {
 			bot.chat(`Buscando ${userInputName} cercanos para minar (una tanda)...`);
-			desiredQuantity = 0; // Será seteado por el conteo de la primera búsqueda
+			desiredQuantity = 0;
 			isSpecificQuantityRequested = false;
 		}
 
 		while (true) {
-			// Bucle principal de recolección
 			checkInterrupt();
-
 			if (isSpecificQuantityRequested) {
-				if (collectedAmount >= desiredQuantity) break; // Objetivo cumplido
-
+				if (collectedAmount >= desiredQuantity) break;
 				const remainingNeededSearch = Math.max(
 					1,
 					Math.min(desiredQuantity - collectedAmount, 20)
 				);
-				bot
-					.chat
-					//`Buscando hasta ${remainingNeededSearch} más de ${userInputName} (recolectado: ${collectedAmount}/${desiredQuantity})...`
-					();
 				blocksToProcess = bot.findBlocks({
 					matching: blockType.id,
 					maxDistance: MAX_SEARCH_DISTANCE,
 					count: remainingNeededSearch,
 				});
-
 				if (blocksToProcess.length === 0) {
 					bot.chat(
 						collectedAmount > 0
@@ -1022,35 +808,30 @@ async function executeConsigueCommand(
 					`Esperame aqui, volere con ${blocksToProcess.length} bloque(s) de ${userInputName}...`
 				);
 			} else {
-				// No es cantidad específica: buscar una tanda y procesarla
-				if (collectedAmount > 0) break; // Solo buscar una vez si no hay cantidad
-
+				if (collectedAmount > 0) break;
 				const initialSearchCount = 20;
-				bot.chat(`Buscando hasta ${initialSearchCount} de ${userInputName}...`);
 				blocksToProcess = bot.findBlocks({
 					matching: blockType.id,
 					maxDistance: MAX_SEARCH_DISTANCE,
 					count: initialSearchCount,
 				});
-
 				if (blocksToProcess.length === 0) {
 					bot.chat(`No encontré bloques de ${userInputName} cerca.`);
 					break;
 				}
-				desiredQuantity = blocksToProcess.length; // El objetivo es minar todos los encontrados
+				desiredQuantity = blocksToProcess.length;
 				bot.chat(
 					`Esperame aqui, volere con ${blocksToProcess.length} bloque(s) de ${userInputName}...`
 				);
 				if (desiredQuantity === 0) break;
 			}
 
-			// Procesar los bloques en blocksToProcess
 			for (const targetBlockPosition of blocksToProcess) {
-				if (isSpecificQuantityRequested && collectedAmount >= desiredQuantity)
+				if (
+					(isSpecificQuantityRequested && collectedAmount >= desiredQuantity) ||
+					(!isSpecificQuantityRequested && collectedAmount >= desiredQuantity)
+				)
 					break;
-				if (!isSpecificQuantityRequested && collectedAmount >= desiredQuantity)
-					break;
-
 				checkInterrupt();
 				let currentBlockEntity = bot.blockAt(targetBlockPosition);
 				if (!currentBlockEntity || currentBlockEntity.type !== blockType.id) {
@@ -1059,11 +840,6 @@ async function executeConsigueCommand(
 					);
 					continue;
 				}
-
-				// bot.chat(
-				// 	`Procesando ${userInputName} en ${targetBlockPosition.x}, ${targetBlockPosition.y}, ${targetBlockPosition.z}.`
-				// );
-
 				try {
 					await bot.pathfinder.goto(
 						new GoalNear(
@@ -1092,14 +868,10 @@ async function executeConsigueCommand(
 						`Error de pathfinding no manejado a ${targetBlockPosition}:`,
 						pathError
 					);
-					// bot.chat(
-					// 	`Problema al llegar a ${userInputName} en ${targetBlockPosition}. Saltando.`
-					// );
 					continue;
 				}
 				checkInterrupt();
-
-				currentBlockEntity = bot.blockAt(targetBlockPosition); // Re-verificar tras moverse
+				currentBlockEntity = bot.blockAt(targetBlockPosition);
 				if (!currentBlockEntity || currentBlockEntity.type !== blockType.id) {
 					bot.chat(
 						`Bloque en ${targetBlockPosition} cambió tras llegar. Saltando.`
@@ -1108,40 +880,26 @@ async function executeConsigueCommand(
 				}
 
 				const creativeMode = bot.game.gameMode === "creative";
-				let canDigNow = false; // Iniciar como false
+				let canDigNow = creativeMode
+					? true
+					: await ensureToolForBlock(currentBlockEntity, userInputName);
 
-				if (creativeMode) {
-					canDigNow = true;
-				} else {
-					// En supervivencia, verificar si la herramienta *actualmente equipada* (debería ser pico de diamante de la verificación inicial)
-					// es suficiente para *este bloque específico*.
-					// Llamamos a ensureToolForBlock de nuevo, pero esta vez con el bloque específico.
-					// Esto maneja casos donde el bloque podría necesitar un hacha en lugar del pico equipado,
-					// o si el pico se rompió y necesita ser reemplazado.
-					canDigNow = await ensureToolForBlock(
-						currentBlockEntity,
-						userInputName
+				if (!canDigNow && !creativeMode) {
+					bot.chat(
+						`No puedo minar ${userInputName} en ${currentBlockEntity.position}. Saltando.`
 					);
-
-					if (!canDigNow) {
-						// ensureToolForBlock ya chateó por qué falló (ej. no pudo obtener hacha, o pico no suficiente)
-						bot.chat(
-							`No puedo minar ${userInputName} en ${currentBlockEntity.position}. Saltando.`
-						);
-					}
 				}
 
 				if (canDigNow) {
 					checkInterrupt();
 					try {
 						await bot.dig(currentBlockEntity);
-						await new Promise((resolve) => setTimeout(resolve, 1500)); // Tiempo para recoger
+						await new Promise((resolve) => setTimeout(resolve, 1500));
 						checkInterrupt();
-						// Después de minar, verificar si la herramienta equipada se rompió
 						if (
 							bot.heldItem === null &&
 							hasRequiredToolEquipped &&
-							bot.game.gameMode !== "creative"
+							!creativeMode
 						) {
 							bot.chat("¡Mi herramienta se rompió!");
 						}
@@ -1178,13 +936,9 @@ async function executeConsigueCommand(
 					);
 					continue;
 				}
-			} // Fin del bucle for (procesando blocksToProcess)
-
-			if (!isSpecificQuantityRequested) {
-				break; // Si no es cantidad específica, salir tras procesar la primera tanda
 			}
-		} // Fin del bucle while(true) de recolección
-
+			if (!isSpecificQuantityRequested) break;
+		}
 		bot.chat(
 			`Tarea de conseguir ${userInputName} finalizada. Total recolectado: ${collectedAmount}.`
 		);
@@ -1193,13 +947,13 @@ async function executeConsigueCommand(
 			bot.chat(
 				`Tarea 'consigue ${userInputName}' pausada por autodefensa. Recolectado: ${collectedAmount}.`
 			);
-			throw err; // Propagar para que runCommand lo maneje
+			throw err;
 		}
 		if (
 			isBotDefendingItself &&
 			(err.message.toLowerCase().includes("pathfinding interrupted") ||
-				err.message.toLowerCase().includes("goal interrupted") || // For general goal interruptions
-				err.message.toLowerCase().includes("goalchanged") || // Specifically for "GoalChanged"
+				err.message.toLowerCase().includes("goal interrupted") ||
+				err.message.toLowerCase().includes("goalchanged") ||
 				err.message.toLowerCase().includes("dig interrupted"))
 		) {
 			console.log(
@@ -1207,7 +961,6 @@ async function executeConsigueCommand(
 			);
 			throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
 		}
-
 		console.error(
 			`Error en 'executeConsigueCommand' para ${userInputName}:`,
 			err
@@ -1234,22 +987,17 @@ async function executeConsigueCommand(
 	}
 }
 
-// **Acciones del bot según el chat**
 bot.on("chat", async (username, message) => {
 	if (username === bot.username) return;
-
-	// Convertir el mensaje a minúsculas para evitar problemas con mayúsculas
 	const msgLower = message.toLowerCase();
 
-	// Manejar comandos generales del bot !rodent <comando>
 	if (msgLower.startsWith(BOT_COMMAND_PREFIX)) {
 		console.log("Bot Command recibido de " + username + ": " + message);
 		const commandString = msgLower.substring(BOT_COMMAND_PREFIX.length).trim();
 		const args = commandString.split(" ");
-		const command = args.shift()?.toLowerCase(); // El primer elemento es el comando, el resto son argumentos. Convertir a minúsculas.
+		const command = args.shift()?.toLowerCase();
 
 		if (command === "sigueme") {
-			// Detener comandos actuales y limpiar cola para seguir
 			if (currentCommand) {
 				bot.pathfinder.stop();
 				bot.chat(`Comando '${currentCommand.name}' cancelado para seguirte.`);
@@ -1257,29 +1005,27 @@ bot.on("chat", async (username, message) => {
 			}
 			commandQueue = [];
 			staying = false;
-			isBotDefendingItself = false; // Salir de modo defensa si estaba activo
-
+			isBotDefendingItself = false;
 			const player = bot.players[username];
 			if (player && player.entity) {
 				followingPlayer = player;
 				bot.chat(`¡Te seguiré, ${username}!`);
 				bot.pathfinder.setGoal(new GoalFollow(followingPlayer.entity, 1), true);
-				stopDefense(false); // Detener la protección de otro jugador si estaba activa
+				stopDefense(false);
 			} else {
 				bot.chat(`No puedo encontrarte para seguirte, ${username}.`);
 			}
 		} else if (command === "quedate") {
 			staying = true;
 			bot.chat("¡Me quedaré aquí!");
-			bot.pathfinder.setGoal(null); // Detiene el movimiento
+			bot.pathfinder.setGoal(null);
 			if (currentCommand) {
 				bot.chat(
 					`Comando '${currentCommand.name}' cancelado para quedarme quieto.`
 				);
-				// No se re-encola, "quedate" tiene prioridad
 				currentCommand = null;
 			}
-			commandQueue = []; // Limpiar la cola de comandos
+			commandQueue = [];
 			bot.chat("Cola de comandos limpiada.");
 		} else if (command === "ven") {
 			const player = bot.players[username];
@@ -1292,14 +1038,12 @@ bot.on("chat", async (username, message) => {
 						1
 					)
 				);
-				// "ven" podría ser un comando encolable si se desea
 				bot.chat(`¡Voy hacia ti, ${username}!`);
 			} else {
 				bot.chat("No puedo ir hacia ti porque no te encuentro.");
 			}
 		} else if (command === "ve") {
 			if (args.length === 3) {
-				// !rodent ve x y z
 				const x = parseInt(args[0]);
 				const y = parseInt(args[1]);
 				const z = parseInt(args[2]);
@@ -1308,18 +1052,19 @@ bot.on("chat", async (username, message) => {
 				} else {
 					addCommandToQueue(
 						"ve_coords",
-						async (x, y, z) => {
-							bot.pathfinder.setGoal(new GoalBlock(x, y, z));
-							bot.chat(`¡Voy a las coordenadas ${x}, ${y}, ${z}!`); // Este chat es inmediato, el movimiento es asíncrono
+						async (x_coord, y_coord, z_coord) => {
+							bot.pathfinder.setGoal(new GoalBlock(x_coord, y_coord, z_coord));
+							bot.chat(
+								`¡Voy a las coordenadas ${x_coord}, ${y_coord}, ${z_coord}!`
+							);
 						},
 						[x, y, z],
 						username
 					);
 				}
 			} else if (args.length === 1) {
-				// !rodent ve <jugador>
-				const targetPlayer = args[0];
-				const player = bot.players[targetPlayer];
+				const targetPlayerName = args[0];
+				const player = bot.players[targetPlayerName];
 				if (player && player.entity) {
 					bot.pathfinder.setGoal(
 						new GoalNear(
@@ -1329,13 +1074,11 @@ bot.on("chat", async (username, message) => {
 							1
 						)
 					);
-					bot.chat(`¡Voy hacia ${targetPlayer}!`);
+					bot.chat(`¡Voy hacia ${targetPlayerName}!`);
 				} else {
-					bot.chat(`No encuentro al jugador ${targetPlayer}.`);
+					bot.chat(`No encuentro al jugador ${targetPlayerName}.`);
 				}
 			} else if (args.length === 0 && followingPlayer) {
-				// !rodent ve (sin args, si está siguiendo a alguien)
-				// Ir hacia el jugador que está siguiendo actualmente
 				if (followingPlayer.entity) {
 					bot.pathfinder.setGoal(
 						new GoalNear(
@@ -1358,7 +1101,6 @@ bot.on("chat", async (username, message) => {
 				);
 			}
 		} else if (command === "aplana") {
-			// Mover la lógica de "aplana" a su propia función para la cola
 			async function executeAplanaCommand(
 				length,
 				width,
@@ -1369,11 +1111,10 @@ bot.on("chat", async (username, message) => {
 				let heightDescription = "";
 
 				if (heightArg === undefined) {
-					yOffsetsToClear = [0, -1]; // Comportamiento por defecto
+					yOffsetsToClear = [0, -1];
 					heightDescription = "2 niveles (pies y debajo)";
 				} else {
 					const heightVal = parseInt(heightArg);
-					// La validación de NaN y rango ya se hizo antes de encolar.
 					if (heightVal > 0) {
 						for (let y = 0; y < heightVal; y++) yOffsetsToClear.push(y);
 						heightDescription = `${heightVal} nivel(es) hacia arriba (desde los pies)`;
@@ -1383,18 +1124,18 @@ bot.on("chat", async (username, message) => {
 							Math.abs(heightVal) + 1
 						} nivel(es) hacia abajo (desde los pies)`;
 					} else {
-						// heightVal === 0
 						yOffsetsToClear.push(0);
 						heightDescription = "solo el nivel de los pies";
 					}
 				}
+				const initialBotPosition = bot.entity.position.clone();
+				const targetCentralX = Math.floor(initialBotPosition.x); // X central del área de aplanado
+				const targetCentralZ = Math.floor(initialBotPosition.z); // Z central del área de aplanado
 
 				bot.chat(
 					`¡Voy a aplanar un área de ${length}x${width} bloques, altura: ${heightDescription}!`
 				);
 
-				// Calcular rangos para dx y dz para centrar el área en el bot
-				// dx para length (eje X), dz para width (eje Z)
 				const minDx = -Math.floor(length / 2);
 				const maxDx = Math.floor((length - 1) / 2);
 				const minDz = -Math.floor(width / 2);
@@ -1403,22 +1144,24 @@ bot.on("chat", async (username, message) => {
 				for (const yOffset of yOffsetsToClear) {
 					for (let dx = minDx; dx <= maxDx; dx++) {
 						for (let dz = minDz; dz <= maxDz; dz++) {
-							// No más condición de círculo, ahora es un rectángulo
 							checkInterrupt();
-							const blockPos = bot.entity.position.offset(dx, yOffset, dz);
+							const blockPos = initialBotPosition
+								.offset(dx, yOffset, dz)
+								.floored();
 							const block = bot.blockAt(blockPos);
 
+							if (dx === 0 && dz === 0 && yOffset === 0) {
+								continue;
+							}
+
 							if (block && block.name !== "air") {
-								let idealToolName = null; // Será 'diamond_axe', 'diamond_shovel', 'diamond_pickaxe' o null
-								// Asegurarse de que block.material existe y es una clave válida en bot.registry.materials
+								let idealToolName = null;
 								const blockMaterial =
 									block.material && bot.registry.materials[block.material]
-										? bot.registry.materials[block.material].name // Usar el nombre del material si está disponible
-										: null; // e.g., 'wood', 'dirt', 'rock', 'sand', 'plant'
-								const blockName = block.name.toLowerCase(); // Para casos específicos como menas
+										? bot.registry.materials[block.material].name
+										: null;
+								const blockName = block.name.toLowerCase();
 
-								// Determinar la herramienta ideal basada en el material del bloque
-								// Estas listas pueden ajustarse según se necesite más precisión
 								const axeMaterials = [
 									"wood",
 									"leaves",
@@ -1494,64 +1237,52 @@ bot.on("chat", async (username, message) => {
 											blockMaterial.includes(matKeyword)
 										))
 								) {
-									// 'brick' es material para nether_brick y brick_block. 'rock' para stone, cobblestone, etc.
 									idealToolName = "diamond_pickaxe";
 								} else {
-									// Fallback si el material no coincide con las listas principales,
-									// pero el nombre del bloque sugiere una herramienta.
-									// Esto es útil si `blockMaterial` es null o no es informativo.
 									if (
 										blockName.includes("log") ||
 										blockName.includes("planks") ||
 										blockName.includes("wood")
-									) {
+									)
 										idealToolName = "diamond_axe";
-									} else if (
+									else if (
 										blockName.includes("dirt") ||
 										blockName.includes("sand") ||
 										blockName.includes("gravel") ||
 										blockName.includes("grass")
-									) {
+									)
 										idealToolName = "diamond_shovel";
-									} else if (
+									else if (
 										blockName.includes("stone") ||
 										blockName.includes("cobble") ||
 										blockName.includes("brick") ||
 										blockName.includes("netherrack") ||
 										blockName.includes("obsidian")
-									) {
+									)
 										idealToolName = "diamond_pickaxe";
-									}
 								}
 
 								let canDigThisBlock = false;
 								const creativeMode = bot.game.gameMode === "creative";
 
 								if (creativeMode) {
-									canDigThisBlock = true; // En creativo, siempre se puede minar.
+									canDigThisBlock = true;
 								} else if (idealToolName) {
-									// Si se identificó una herramienta ideal
 									let toolItem = itemByName(idealToolName);
-
-									// Si no tiene la herramienta ideal en mano, intentar obtenerla/equiparla
 									if (!bot.heldItem || bot.heldItem.name !== idealToolName) {
 										if (!toolItem) {
-											// No está en el inventario
-											// console.log(`[Aplanar] No tengo ${idealToolName}. Intentando /give...`);
 											bot.chat(
 												`/give ${bot.username} minecraft:${idealToolName}`
 											);
-											await new Promise((resolve) => setTimeout(resolve, 1000)); // Esperar a que aparezca el ítem
+											await new Promise((resolve) => setTimeout(resolve, 1000));
 											checkInterrupt();
 											toolItem = itemByName(idealToolName);
 										}
 										if (toolItem) {
-											// Si ahora lo tiene (o ya estaba en inventario)
 											await bot.equip(toolItem, "hand");
 											checkInterrupt();
 										}
 									}
-									// Verificar si con la herramienta (idealmente) equipada puede minar
 									if (
 										bot.heldItem &&
 										bot.heldItem.name === idealToolName &&
@@ -1560,29 +1291,120 @@ bot.on("chat", async (username, message) => {
 										canDigThisBlock = true;
 									}
 								} else {
-									// No se identificó herramienta ideal (ej. flores), intentar con mano/herramienta actual
-									if (bot.canDigBlock(block)) {
-										canDigThisBlock = true;
-									}
+									if (bot.canDigBlock(block)) canDigThisBlock = true;
 								}
 
 								if (canDigThisBlock) {
+									const botFeet = bot.entity.position.floored();
+									const supportUnderBot = botFeet.offset(0, -1, 0);
+									let wasOwnSupport = blockPos.equals(supportUnderBot); // ¿Es el bloque a minar nuestro soporte actual?
+
+									if (blockPos.equals(supportUnderBot)) {
+										if (length > 1 || width > 1) {
+											const sideOffsets = [
+												{ x: 1, z: 0 },
+												{ x: -1, z: 0 },
+												{ x: 0, z: 1 },
+												{ x: 0, z: -1 },
+											];
+											for (const off of sideOffsets) {
+												const candidateStandPos = botFeet.offset(
+													off.x,
+													0,
+													off.z
+												);
+												const candidateSupportPos = candidateStandPos.offset(
+													0,
+													-1,
+													0
+												);
+												if (
+													bot.blockAt(candidateStandPos)?.name === "air" &&
+													bot.blockAt(candidateSupportPos)?.name !== "air" &&
+													!candidateSupportPos.equals(blockPos)
+												) {
+													try {
+														await bot.pathfinder.goto(
+															new goals.GoalBlock(
+																candidateStandPos.x,
+																candidateStandPos.y,
+																candidateStandPos.z
+															)
+														);
+														break;
+													} catch (e) {
+														/* No se pudo mover */
+													}
+												}
+											}
+										}
+									} else if (
+										bot.entity.position.distanceTo(
+											blockPos.offset(0.5, 0.5, 0.5)
+										) > 4.5
+									) {
+										try {
+											await bot.pathfinder.goto(
+												new goals.GoalNear(
+													blockPos.x,
+													blockPos.y,
+													blockPos.z,
+													2.5
+												)
+											);
+										} catch (e) {
+											continue;
+										}
+									}
 									try {
 										await bot.dig(block);
-										// Pequeña pausa para que el bloque se actualice en el servidor y cliente.
-										// No es tanto para recoger ítems en 'aplana' ya que el bot está encima.
 										await new Promise((resolve) => setTimeout(resolve, 50));
 										checkInterrupt();
+
+										if (wasOwnSupport) {
+											// Si acabamos de minar nuestro propio soporte, es probable que hayamos caído.
+											// Intentar volver a la columna X,Z central del área de aplanado, en nuestra Y actual.
+											const currentBotFlooredPos =
+												bot.entity.position.floored();
+											const currentBotY = currentBotFlooredPos.y;
+											const currentBotX = currentBotFlooredPos.x;
+											const currentBotZ = currentBotFlooredPos.z;
+
+											const targetCenterColumnPos = new Vec3(
+												targetCentralX,
+												currentBotY,
+												targetCentralZ
+											);
+											const supportAtCenterColumn = bot.blockAt(
+												targetCenterColumnPos.offset(0, -1, 0)
+											);
+
+											// Si no estamos ya en la columna central (X,Z) Y hay soporte allí
+											if (
+												(currentBotX !== targetCentralX ||
+													currentBotZ !== targetCentralZ) &&
+												supportAtCenterColumn &&
+												supportAtCenterColumn.name !== "air"
+											) {
+												try {
+													// bot.chat("Volviendo al centro de la columna..."); // Para depuración
+													await bot.pathfinder.goto(
+														new goals.GoalBlock(
+															targetCenterColumnPos.x,
+															targetCenterColumnPos.y,
+															targetCenterColumnPos.z
+														)
+													);
+												} catch (e) {
+													// bot.chat("No pude volver al centro de la columna."); // Para depuración
+												}
+											}
+										}
 									} catch (err) {
 										if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR)
 											throw err;
-										// No enviar chat por cada error de excavación para no spamear al usuario.
-										// Los errores se loguearán en la consola del bot si es necesario.
-										// console.error(`[Aplanar] Error al picar bloque ${block.displayName} en ${blockPos}: ${err.message}`);
 									}
-								} else if (!creativeMode) {
-									// console.log(`[Aplanar] No se pudo minar el bloque ${block.displayName} en ${block.position} con las herramientas disponibles.`);
-								}
+								} // fin de if (canDigThisBlock)
 							}
 						}
 					}
@@ -1594,7 +1416,6 @@ bot.on("chat", async (username, message) => {
 				const length = parseInt(args[0]);
 				const width = parseInt(args[1]);
 				let heightArg = args[2] !== undefined ? parseInt(args[2]) : undefined;
-
 				if (
 					isNaN(length) ||
 					length < 1 ||
@@ -1608,7 +1429,6 @@ bot.on("chat", async (username, message) => {
 					);
 					return;
 				}
-
 				if (heightArg !== undefined) {
 					if (isNaN(heightArg) || heightArg < -5 || heightArg > 5) {
 						bot.chat(
@@ -1617,7 +1437,6 @@ bot.on("chat", async (username, message) => {
 						return;
 					}
 				}
-
 				addCommandToQueue(
 					"aplana",
 					executeAplanaCommand,
@@ -1641,10 +1460,8 @@ bot.on("chat", async (username, message) => {
 				);
 				return;
 			}
-
 			let itemName;
 			let quantityArg = null;
-
 			const lastArg = args[args.length - 1];
 			if (args.length > 1 && !isNaN(parseInt(lastArg))) {
 				quantityArg = lastArg;
@@ -1652,7 +1469,6 @@ bot.on("chat", async (username, message) => {
 			} else {
 				itemName = args.join(" ").toLowerCase();
 			}
-
 			addCommandToQueue(
 				"consigue",
 				executeConsigueCommand,
@@ -1665,14 +1481,10 @@ bot.on("chat", async (username, message) => {
 				bot.chat(`No te encuentro, ${username}.`);
 				return;
 			}
-
-			// Si el bot estaba en modo "quedate", desactivarlo para permitir el movimiento de defensa.
 			if (staying) {
 				staying = false;
 				bot.chat("Dejaré de estar quieto para poder protegerte mejor.");
 			}
-
-			// Detener comandos actuales y limpiar cola para proteger
 			if (currentCommand) {
 				bot.pathfinder.stop();
 				bot.chat(`Comando '${currentCommand.name}' cancelado para protegerte.`);
@@ -1683,55 +1495,33 @@ bot.on("chat", async (username, message) => {
 				bot.chat(`Ya te estoy protegiendo, ${username}.`);
 				return;
 			}
-
-			stopDefense(false); // Detener cualquier defensa anterior sin notificar (la nueva notificación lo cubrirá)
-
-			playerToDefend = player; // player es bot.players[username]
-			console.log(
-				`[Defensa] Iniciando defensa para ${username}. Jugador:`,
-				playerToDefend
-			);
-			console.log(
-				`[Defensa] Entidad del jugador a defender:`,
-				playerToDefend.entity ? "Existe" : "NO Existe",
-				playerToDefend.entity
-			);
-
+			stopDefense(false);
+			playerToDefend = player;
+			console.log(`[Defensa] Iniciando defensa para ${username}.`);
 			bot.chat(
 				`¡Entendido, ${username}! Te protegeré de los monstruos cercanos.`
 			);
 			defenseIntervalId = setInterval(async () => {
-				// Hacer el callback async
-				// console.log(`[Defensa Tick] Verificando para ${playerToDefend ? playerToDefend.username : 'nadie (playerToDefend es null)'}.`);
 				if (
 					!playerToDefend ||
 					!playerToDefend.entity ||
 					playerToDefend.entity.health === 0 ||
 					!bot.players[playerToDefend.username]
 				) {
-					if (playerToDefend) {
-						// Este log es importante para saber por qué se detuvo
-						console.log(
-							`[Defensa Tick] Condición de parada temprana. Usuario: ${
-								playerToDefend.username
-							}, Entidad: ${playerToDefend.entity ? "OK" : "Falta"}, Salud: ${
-								playerToDefend.entity ? playerToDefend.entity.health : "N/A"
-							}, En bot.players: ${!!bot.players[playerToDefend.username]}`
-						);
+					if (playerToDefend)
 						bot.chat(
 							`Dejando de proteger a ${playerToDefend.username} (ya no está disponible o ha muerto).`
 						);
-					} else {
-						console.log(
-							"[Defensa Tick] playerToDefend es null, deteniendo intervalo de defensa."
-						);
-					}
 					stopDefense(false);
 					return;
 				}
-				// console.log(`[Defensa Tick] ${playerToDefend.username} está OK. Buscando hostiles cerca de ${playerToDefend.entity.position}. Entidades totales: ${Object.keys(bot.entities).length}`);
 				let nearestHostile = null;
-				let minDistanceSq = DEFENSE_RADIUS * DEFENSE_RADIUS; // Usar distancia cuadrada para eficiencia
+				let minDistanceSq = DEFENSE_RADIUS * DEFENSE_RADIUS;
+				const commonHostilesString = process.env.COMMON_HOSTILES || "";
+				const commonHostiles = commonHostilesString
+					.split(",")
+					.map((mob) => mob.trim().toLowerCase())
+					.filter((mob) => mob.length > 0);
 
 				for (const entityId in bot.entities) {
 					const entity = bot.entities[entityId];
@@ -1740,70 +1530,32 @@ bot.on("chat", async (username, message) => {
 						entity === bot.entity ||
 						entity === playerToDefend.entity
 					)
-						// Añadido !entity por si acaso
 						continue;
-					let isHostile = false;
 					const entityNameLower = entity.name
 						? entity.name.toLowerCase()
 						: null;
-
-					// Leer la lista de mobs hostiles desde el archivo .env
-					// Proporciona una lista vacía por defecto si la variable no está definida.
-					const commonHostilesString = process.env.COMMON_HOSTILES || "";
-					const commonHostiles = commonHostilesString
-						.split(",")
-						.map((mob) => mob.trim().toLowerCase())
-						.filter((mob) => mob.length > 0);
-
-					// La entidad se considera hostil si su nombre (en minúsculas) está en la lista commonHostiles.
 					if (entityNameLower && commonHostiles.includes(entityNameLower)) {
-						isHostile = true;
-					}
-
-					// console.log(`[Defensa Eval] Entidad: ${entity.name || entity.displayName || entity.type}, Tipo: ${entity.type}, Kind: ${entity.kind}, ¿Es Hostil?: ${isHostile}`);
-
-					if (isHostile) {
-						// console.log(`[Defensa Tick] Entidad hostil potencial: ${entity.name || entity.displayName} (${entity.type}, ${entity.kind}) en ${entity.position}`);
 						const distanceSq = playerToDefend.entity.position.distanceSquared(
 							entity.position
 						);
-						// console.log(`[Defensa Tick] Distancia cuadrada a ${entity.name || entity.displayName}: ${distanceSq} (RadioSq: ${minDistanceSq})`);
 						if (distanceSq < minDistanceSq) {
 							minDistanceSq = distanceSq;
 							nearestHostile = entity;
 						}
 					}
 				}
-
 				if (nearestHostile) {
-					await ensureBestGear(false); // Asegurarse de tener el mejor equipo
-
-					// Establecer el objetivo de seguir al hostil para asegurar el movimiento.
-					// El '1.5' es la distancia a la que el bot intentará mantenerse del objetivo mientras lo sigue.
-					// Un valor más pequeño lo acercará más, permitiendo el ataque.
+					await ensureBestGear(false);
 					const goal = new GoalFollow(nearestHostile, 1.5);
-					bot.pathfinder.setGoal(goal, true); // El segundo 'true' es para objetivos dinámicos (el mob se mueve)
-
+					bot.pathfinder.setGoal(goal, true);
 					console.log(
-						`[Defensa Tick] Hostil más cercano encontrado: ${
+						`[Defensa Tick] Hostil más cercano: ${
 							nearestHostile.name || nearestHostile.displayName
-						} (${nearestHostile.type}). Siguiendo y Atacando.`
+						}. Atacando.`
 					);
-					bot.attack(nearestHostile, true); // Añadido 'true' como en el ejemplo
+					bot.attack(nearestHostile, true);
 				} else {
-					// No hay hostiles cercanos al jugador protegido.
-					// Si el bot tenía un objetivo de pathfinder (ej. seguir a un hostil anterior), lo cancelamos.
-					if (bot.pathfinder.goal) {
-						// Verifica si hay un objetivo activo
-						bot.pathfinder.setGoal(null);
-					}
-					console.log(
-						`[Defensa Tick] No se encontraron hostiles dentro del radio para ${
-							playerToDefend
-								? playerToDefend.username
-								: "N/A (playerToDefend es null)"
-						}.`
-					);
+					if (bot.pathfinder.goal) bot.pathfinder.setGoal(null);
 				}
 			}, DEFENSE_TICK_RATE);
 		} else if (
@@ -1820,7 +1572,7 @@ bot.on("chat", async (username, message) => {
 		} else if (command === "reanuda") {
 			staying = false;
 			bot.chat("¡Listo para moverte de nuevo!");
-			runNextCommandFromQueue(); // Intentar procesar la cola si algo estaba pendiente
+			runNextCommandFromQueue();
 		} else if (command === "chat") {
 			const prompt = args.join(" ").trim();
 			if (prompt) {
@@ -1834,8 +1586,6 @@ bot.on("chat", async (username, message) => {
 		} else if (command === "inventario" || command === "list") {
 			sayItems();
 		} else if (command === "dame" || command === "tira") {
-			// Formato: !rodent tirar <nombre_item> [cantidad]
-			// Ej: !rodent tirar piedra 5  O  !rodent tirar diamante
 			async function executeDameCommand(
 				itemName,
 				amountStr,
@@ -1847,8 +1597,7 @@ bot.on("chat", async (username, message) => {
 						`¡Entendido, ${usernameForContext}! Voy hacia ti para darte ${itemName}.`
 					);
 					try {
-						if (isBotDefendingItself)
-							throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+						checkInterrupt();
 						await bot.pathfinder.goto(
 							new GoalNear(
 								player.entity.position.x,
@@ -1857,12 +1606,11 @@ bot.on("chat", async (username, message) => {
 								2
 							)
 						);
-						if (isBotDefendingItself)
-							throw new Error(INTERRUPTED_FOR_DEFENSE_ERROR);
+						checkInterrupt();
 						bot.chat(
 							`Llegué, ${usernameForContext}. Aquí tienes tu ${itemName}.`
 						);
-						await tossItemCmd(itemName, amountStr); // tossItemCmd es síncrono o asíncrono? Asumimos que es rápido.
+						await tossItemCmd(itemName, amountStr);
 					} catch (err) {
 						if (err.message === INTERRUPTED_FOR_DEFENSE_ERROR) throw err;
 						console.error(
@@ -1881,9 +1629,8 @@ bot.on("chat", async (username, message) => {
 					await tossItemCmd(itemName, amountStr);
 				}
 			}
-
 			if (args.length >= 1) {
-				const itemName = args[0].toLowerCase(); // Asegurar minúsculas para la traducción
+				const itemName = args[0].toLowerCase();
 				const amountStr = args[1];
 				addCommandToQueue(
 					"dame",
@@ -1895,41 +1642,27 @@ bot.on("chat", async (username, message) => {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}dame <nombre_item> [cantidad]`);
 			}
 		} else if (command === "equipar" || command === "equip") {
-			// Formato: !rodent equipar <destino> <nombre_item>
-			// Destinos comunes: hand, head, torso, legs, feet, off-hand
-			// Ej: !rodent equipar hand espada_diamante
 			if (args.length === 2) {
 				const destination = args[0].toLowerCase();
 				const itemName = args[1];
-				// equipItemCmd es rápido, no necesita estar en la cola principal de tareas largas
 				equipItemCmd(itemName, destination);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}equipar <destino> <nombre_item>`);
 			}
 		} else if (command === "desequipar" || command === "unequip") {
-			// Formato: !rodent desequipar <destino>
-			// Ej: !rodent desequipar hand
 			if (args.length === 1) {
 				const destination = args[0].toLowerCase();
-				// unequipItemCmd es rápido
 				unequipItemCmd(destination);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}desequipar <destino>`);
 			}
 		} else if (command === "usar" || command === "use") {
-			// Ahora puede aceptar un nombre de ítem
-			// Formato: !rodent usar [nombre_item]
-			// Ej: !rodent usar espada_diamante  O  !rodent usar (para usar lo que tenga en mano)
-			const itemName = args[0]; // Puede ser undefined si solo se escribe "!rodent usar"
-			// useItemCmd es relativamente rápido
-			useItemCmd(itemName); // No se pasa username, ya que usa el inventario del bot
+			const itemName = args[0];
+			useItemCmd(itemName);
 		} else if (command === "fabricar" || command === "craft") {
-			// Formato: !rodent fabricar <nombre_item> [cantidad]
-			// Ej: !rodent fabricar palo 4
 			if (args.length >= 1) {
 				const itemName = args[0];
-				const amountStr = args[1]; // Puede ser undefined
-				// craftItemCmd puede implicar ir a una mesa, pero por ahora lo tratamos como rápido
+				const amountStr = args[1];
 				craftItemCmd(itemName, amountStr);
 			} else {
 				bot.chat(`Uso: ${BOT_COMMAND_PREFIX}fabricar <nombre_item> [cantidad]`);
@@ -1945,8 +1678,6 @@ bot.on("chat", async (username, message) => {
 			);
 		} else if (command === "hambre") {
 			const foodLevel = bot.food;
-			const saturation = bot.foodSaturation; // Aunque no lo usemos directamente en el mensaje, es bueno saber que existe.
-
 			if (foodLevel >= 18) {
 				bot.chat(`No tengo hambre. Mi nivel de comida es ${foodLevel}/20.`);
 			} else if (foodLevel >= 10) {
@@ -1966,54 +1697,42 @@ bot.on("chat", async (username, message) => {
 	}
 });
 
-// Eventos adicionales
 bot.on("death", async () => {
 	console.log(`[Death System] El bot ha muerto. Salud: ${bot.health}`);
-
-	// Detener acciones actuales
-	stopDefense(false); // Detener la defensa si el bot muere, sin notificar al jugador (ya está muerto)
+	stopDefense(false);
 	if (selfDefenseIntervalId) {
-		clearInterval(selfDefenseIntervalId); // Detener el bucle de auto-defensa
+		clearInterval(selfDefenseIntervalId);
 		selfDefenseIntervalId = null;
-		isBotDefendingItself = false; // Asegurarse de que el estado se reinicie
+		isBotDefendingItself = false;
 		currentSelfDefenseTarget = null;
 	}
 	if (autoEatIntervalId) {
-		// Limpiar intervalo de auto-alimentación
 		clearInterval(autoEatIntervalId);
 		autoEatIntervalId = null;
-		isEating = false; // Resetear estado de alimentación
+		isEating = false;
 	}
-
-	// Limpiar cola y comando actual si el bot muere
 	if (currentCommand) {
-		bot.pathfinder.stop(); // Detener cualquier pathfinding del comando actual
+		bot.pathfinder.stop();
 		console.log(
-			`[Death System] Comando actual '${currentCommand.name}' limpiado debido a la muerte.`
+			`[Death System] Comando actual '${currentCommand.name}' limpiado.`
 		);
 		currentCommand = null;
 	}
-	commandQueue = []; // Limpiar toda la cola de comandos
+	commandQueue = [];
 	console.log("[Death System] Cola de comandos limpiada.");
-	bot.pathfinder.setGoal(null); // Limpiar explícitamente cualquier objetivo de pathfinder activo
+	bot.pathfinder.setGoal(null);
 	console.log("[Death System] Estado general limpiado tras la muerte.");
-
-	// Establecer un mensaje de muerte por defecto.
-	// El plugin 'mineflayer-death-event' lo sobrescribirá si detecta un mensaje específico.
 	capturedDeathMessage = "Desaparecí misteriosamente... ¡pero he vuelto!";
 	console.log(
-		`[Death System] Mensaje de muerte por defecto establecido: "${capturedDeathMessage}"`
+		`[Death System] Mensaje de muerte por defecto: "${capturedDeathMessage}"`
 	);
 });
 
-// Manejar el evento del plugin mineflayer-death-event
 bot.on("death_event", (victim, killer, message) => {
-	// victim y killer son entidades, message es el string del mensaje de muerte
 	if (victim && victim.username === bot.username && message) {
-		capturedDeathMessage = message; // Sobrescribir con el mensaje específico del plugin
-		// Loguear en consola la razón de la muerte capturada
+		capturedDeathMessage = message;
 		console.log(
-			`[Death Event Plugin] Razón de muerte específica capturada para ${bot.username}: "${capturedDeathMessage}"`
+			`[Death Event Plugin] Razón de muerte capturada: "${capturedDeathMessage}"`
 		);
 	}
 });
