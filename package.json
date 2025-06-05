@@ -4,16 +4,17 @@
 	"description": "Bot de Minecraft con integración de Shapes API",
 	"main": "index.js",
 	"dependencies": {
+		"cron": "^3.1.1",
 		"dotenv": "^16.5.0",
+		"ejs": "^3.1.9",
+		"express": "^4.18.2",
+		"express-ws": "^5.0.2",
 		"minecraft-data": "^3.89.0",
 		"mineflayer": "^4.0.0",
 		"mineflayer-auto-eat": "^3.3.6",
+		"mineflayer-death-event": "^1.0.0",
 		"mineflayer-pathfinder": "^2.4.5",
-		"openai": "^5.0.1",
-		"express": "^4.18.2",
-  		"express-ws": "^5.0.2",
-		"cron": "^3.1.1",
-  		"ejs": "^3.1.9"
+		"openai": "^5.0.1"
 	},
 	"scripts": {
 		"start": "node index.js"
