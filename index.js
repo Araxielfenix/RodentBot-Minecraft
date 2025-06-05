@@ -31,6 +31,7 @@ const bot = mineflayer.createBot({
 	//host: "localhost",
 	//port: 25565,
 	username: "RodentBot",
+	version: "1.21.1", // Forzar la versión de Minecraft
 });
 
 // Variables de estado
